@@ -15,6 +15,11 @@ dependencies = [
     "okto-grafx>=0.0.8",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    # The WebSocket write session runs on uvicorn's `ws="websockets"` protocol, and this daemon answers
+    # /api and /admin/api through Starlette types directly — both are imported by name, so both are
+    # declared rather than borrowed from whatever FastAPI happened to pull in.
+    "websockets>=12",
+    "starlette>=0.37",
     "pydantic>=2.7",
 ]
 

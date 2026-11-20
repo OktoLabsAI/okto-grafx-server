@@ -19,8 +19,10 @@ LOG="$WORK_DIR/daemon.log"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 
-if [ ! -x "$PYTHON" ]; then
-  echo "no virtualenv at $PYTHON (set PYTHON=...)" >&2
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  # A path or a command name: CI installs the project into the interpreter the workflow set up and has
+  # no .venv, so `PYTHON=python3` has to be as honourable as `PYTHON=./.venv/bin/python`.
+  echo "no interpreter at $PYTHON (set PYTHON=... to a virtualenv python, or one on PATH)" >&2
   exit 2
 fi
 

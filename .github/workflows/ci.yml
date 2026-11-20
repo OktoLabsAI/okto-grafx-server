@@ -88,6 +88,8 @@ jobs:
         env:
           PORT: "8899"
           WITH_BROWSER: "0"
+          # There is no .venv on a runner: the gate runs on the interpreter setup-python provided.
+          PYTHON: python3
         run: ./scripts/acceptance.sh
 
   browser:
@@ -115,6 +117,7 @@ jobs:
         env:
           PORT: "8900"
           WITH_README: "0"
+          PYTHON: python3
         run: ./scripts/acceptance.sh
       - uses: actions/upload-artifact@v4
         if: always()
