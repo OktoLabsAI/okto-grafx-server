@@ -344,6 +344,19 @@ try {
     if ($signedIn.Body -notmatch '"auth":"token"') { Die "the session did not report token auth: $($signedIn.Body)" }
     Ok '401 without a credential, 200 with the rotated one'
 
+    # ------------------------------------------------------------ rerun against a running server
+    Step 'A rerun against a running server is refused before the package step'
+    # Rerunning the installer is the documented upgrade path. On Unix it is uneventful: the running
+    # binary is unlinked and the daemon keeps serving from the inode it started on. Windows refuses to
+    # write over the executable a process is running, so the same rerun dies inside pip with a raw
+    # WinError 32 and an environment that is part old, part new - and the error never mentions the one
+    # thing that would have helped, which is that the server was still up. Refusing early, with the
+    # command that clears it, is the honest shape of that rerun.
+    if (Invoke-Installer @('-NoRun')) { Die 'install.ps1 reinstalled over a running server instead of refusing first' }
+    Expect-Literal 'cannot replace the executable'
+    Stop-SandboxDaemon
+    Note 'daemon stopped, daemon.pid left in place: the next rerun has to tell a stale pid from a live one'
+
     Step 'A rerun over a state directory that requires a token says so'
     if (-not (Invoke-Installer @('-NoRun'))) { Die 'a second install.ps1 exited non-zero' }
     Expect-Literal 'State directory already exists'
