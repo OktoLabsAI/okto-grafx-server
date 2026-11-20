@@ -189,11 +189,11 @@ function Test-PythonAtLeast {
     # and Python 2 prints to stderr, which Invoke-Native has already merged.
     param(
         [string] $File,
-        [string[]] $Prefix = @(),
+        [string[]] $ArgPrefix = @(),
         [int] $Major = 3,
         [int] $Minor = 11
     )
-    $result = Invoke-Native $File ($Prefix + @('--version'))
+    $result = Invoke-Native $File ($ArgPrefix + @('--version'))
     $text = ($result.Lines -join ' ')
     $match = [regex]::Match($text, 'Python (\d+)\.(\d+)')
     if (-not $match.Success) {
@@ -328,10 +328,14 @@ if ($UsingUv) {
         }
         # The launcher needs `-3` before `-c` or it may pick a 2.x; every other interpreter takes the
         # arguments directly, and that prefix has to travel with the path all the way to venv creation.
-        $prefix = @()
-        if ((Split-Path -Leaf $resolved) -ieq 'py.exe') { $prefix = @('-3') }
-        $probe = Test-PythonAtLeast -File $resolved -Prefix $prefix
-        if ($probe.Ok) { $PythonBin = $resolved; $PythonArgs = $prefix; break }
+        # $launcherArgs, never $prefix: PowerShell names are case-insensitive, so a lowercase `$prefix`
+        # in this loop *is* the script's `$Prefix` - the install directory - and the wipe shows up two
+        # screens later as New-Item refusing an empty path, with no hint of where it was emptied. That is
+        # how this run actually failed on the first try on Windows.
+        $launcherArgs = @()
+        if ((Split-Path -Leaf $resolved) -ieq 'py.exe') { $launcherArgs = @('-3') }
+        $probe = Test-PythonAtLeast -File $resolved -ArgPrefix $launcherArgs
+        if ($probe.Ok) { $PythonBin = $resolved; $PythonArgs = $launcherArgs; break }
         $tried += "$resolved ($($probe.Detail))"
     }
     if (-not $PythonBin) {
@@ -390,8 +394,8 @@ try {
         foreach ($line in Get-Content -LiteralPath $SumsPath) {
             $fields = @(($line -split '\s+') | Where-Object { $_ })
             if ($fields.Count -lt 2) { continue }
-            $name = (($fields[1] -replace '^\*', '') -replace '.*[\\/]', '')
-            if ($name -eq $WheelName) { $expected = $fields[0].ToLowerInvariant(); break }
+            $listedName = (($fields[1] -replace '^\*', '') -replace '.*[\\/]', '')
+            if ($listedName -eq $WheelName) { $expected = $fields[0].ToLowerInvariant(); break }
         }
         if (-not $expected) {
             Stop-WithError "the release's SHA256SUMS has no line for $WheelName - refusing to install it unverified"

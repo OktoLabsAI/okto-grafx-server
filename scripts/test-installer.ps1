@@ -159,9 +159,9 @@ function Stop-SandboxDaemon {
 
 function Invoke-Installer {
     param([string[]] $Extra = @())
-    $arguments = @('-Prefix', $Prefix, '-StateDir', $State, '-Root', $Root, '-Port', $Port,
-                  '-Installer', $Installer, '-Python', $Python) + $SourceArgs + $Extra
-    return Invoke-PsScript -File $Install -Arguments $arguments
+    $installArgs = @('-Prefix', $Prefix, '-StateDir', $State, '-Root', $Root, '-Port', $Port,
+                     '-Installer', $Installer, '-Python', $Python) + $SourceArgs + $Extra
+    return Invoke-PsScript -File $Install -Arguments $installArgs
 }
 
 try {
@@ -209,8 +209,30 @@ try {
         if ($entry.Want -eq 'lf' -and $crlf -gt 0) {
             Die "$($entry.File) contains CRLF: bash will not read it"
         }
+        if ($entry.File -notlike '*.ps1') { continue }
+        # PowerShell variable names are case-insensitive, so `$state` and `$State` are one variable and
+        # `$prefix = @()` quietly empties the install directory. Nothing warns about it, and the crash
+        # happens later, somewhere that says nothing about the assignment. Comment lines are skipped:
+        # prose about the trap mentions the variable on purpose.
+        $seen = @{}
+        $clashes = @()
+        $lineNo = 0
+        foreach ($line in ($text -split "\r?\n")) {
+            $lineNo++
+            if ($line.Trim().StartsWith('#')) { continue }
+            foreach ($found in [regex]::Matches($line, '\$\{?([A-Za-z_][A-Za-z0-9_]*)')) {
+                $variable = $found.Groups[1].Value
+                $key = $variable.ToLowerInvariant()
+                if (-not $seen.ContainsKey($key)) { $seen[$key] = $variable; continue }
+                # -cne, not -ne: comparing spellings case-insensitively would report that they match.
+                if ($seen[$key] -cne $variable) { $clashes += "$($seen[$key])/$variable at line $lineNo" }
+            }
+        }
+        if ($clashes.Count -gt 0) {
+            Die "$($entry.File) has case-only variable collisions: $($clashes[0]) (and $($clashes.Count - 1) more)"
+        }
     }
-    Ok 'the six shipped files hold the encoding and line endings they promise'
+    Ok 'the six shipped files hold the encoding, line endings and variable names they promise'
     $psVersion = ($PSVersionTable.PSVersion.ToString())
     # The harness itself may be pwsh 7 on the runner; the scripts are driven by the in-box 5.1 below,
     # so record which interpreter is doing the parsing.
@@ -226,8 +248,8 @@ try {
     }
     Ok "both cmd front-ends find their script and print the switches ($psVersion driving)"
 
-    $probe = Get-Native $Python @('--version')
-    if ($probe.Code -ne 0) { Die "$Python does not run: $($probe.Lines -join ' ')" }
+    $interpreterCheck = Get-Native $Python @('--version')
+    if ($interpreterCheck.Code -ne 0) { Die "$Python does not run: $($interpreterCheck.Lines -join ' ')" }
 
     Step '-DryRun describes the run and touches nothing'
     if (-not (Invoke-Installer @('-DryRun'))) { Die 'install.ps1 -DryRun exited non-zero' }
@@ -339,12 +361,12 @@ try {
     # The probe is a file, not a `-c` snippet: PowerShell's native argument quoting has to survive the
     # semicolons and quotes of an inline program, and a quoting mistake looks exactly like an interpreter
     # that cannot import, which sends you hunting through installs that are fine.
-    $Probe = Join-Path $Sandbox 'probe_imports.py'
-    Set-Content -LiteralPath $Probe -Value 'import okto_grafx, okto_grafx_server' -Encoding ascii
+    $importProbe = Join-Path $Sandbox 'probe_imports.py'
+    Set-Content -LiteralPath $importProbe -Value 'import okto_grafx, okto_grafx_server' -Encoding ascii
     $RuntimePy = $null
     foreach ($candidate in $candidates) {
         if (-not $candidate -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
-        if ((Get-Native $candidate @($Probe)).Code -eq 0) { $RuntimePy = $candidate; break }
+        if ((Get-Native $candidate @($importProbe)).Code -eq 0) { $RuntimePy = $candidate; break }
     }
     if (-not $RuntimePy) { Die "no interpreter with okto-grafx installed; tried $($candidates -join ', ')" }
 
