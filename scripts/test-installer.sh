@@ -171,8 +171,34 @@ step "Attach a store and read it back over the data plane"
 # The interpreter is whatever the installed command is running on — the venv's for a pip install, the
 # uv tool environment's for a uv install. It has okto-grafx in it, because the server depends on it,
 # which is exactly what we want to prove about the package.
-RUNTIME_PY="$(head -n 1 "$BIN" | sed -e 's/^#!//' -e 's/ .*//')"
-[ -x "$RUNTIME_PY" ] || die "could not find the interpreter behind $BIN"
+# Which interpreter is behind the installed command? Reading the shebang works until it does not: a shim
+# that says `#!/usr/bin/env python3` turns into `env - <store>`, which fails with "is a directory" and
+# blames the store. So every plausible candidate is tried against the thing we actually need from it —
+# the packages this project installed — and the first one that can import them wins.
+SHEBANG="$(head -n 1 "$BIN" 2>/dev/null || true)"
+CANDIDATES=()
+case "$SHEBANG" in
+  *"/env "*) CANDIDATES+=("$(command -v "${SHEBANG##* }" 2>/dev/null || true)") ;;
+  '#!'*) CANDIDATES+=("${SHEBANG#'#!'}") ;;
+esac
+CANDIDATES+=(
+  "$XDG_DATA_HOME/uv/tools/okto-grafx-server/bin/python"
+  "$XDG_DATA_HOME/okto-grafx-server/venv/bin/python"
+  "$HOME/.local/share/uv/tools/okto-grafx-server/bin/python"
+  "$OKGIT_PREFIX/bin/python3"
+  "$OKGIT_PYTHON"
+)
+RUNTIME_PY=""
+for candidate in "${CANDIDATES[@]}"; do
+  [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+  if "$candidate" -c 'import okto_grafx, okto_grafx_server' 2>/dev/null; then
+    RUNTIME_PY="$candidate"
+    break
+  fi
+done
+if [ -z "$RUNTIME_PY" ]; then
+  die "no interpreter with okto-grafx installed; $BIN starts with '$SHEBANG'"
+fi
 # $OKGIT_ROOT was created and resolved by install.sh; on macOS the temp dir is under /tmp, which is a
 # symlink, and the daemon refuses a store path with a symlinked component.
 ROOT_REAL="$(cd "$OKGIT_ROOT" && pwd -P)"
