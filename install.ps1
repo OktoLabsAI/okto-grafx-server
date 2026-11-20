@@ -368,10 +368,11 @@ if ($UsingUv) {
 
 # --------------------------------------------------------------------------------- artifact
 # mktemp equivalent. Under -DryRun nothing is created, so the directory must not exist either - the
-# harness asserts its parent stays empty.
-$Work = $null
+# harness asserts its parent stays empty. It still gets a name: a dry run has to say which files it would
+# write, and leaving this null meant the release branch had no path to talk about, which is how -DryRun
+# with no -FromTree ended up unable to bind -Path on its very first line.
+$Work = Join-Path (Get-EnvDefault 'TEMP' $env:USERPROFILE) ('okg-install.' + [Guid]::NewGuid().ToString('N').Substring(0, 12))
 if (-not $DryRun) {
-    $Work = Join-Path (Get-EnvDefault 'TEMP' $env:USERPROFILE) ('okg-install.' + [Guid]::NewGuid().ToString('N').Substring(0, 12))
     New-Item -ItemType Directory -Path $Work -Force | Out-Null
 }
 
@@ -394,42 +395,58 @@ try {
     } else {
         $WheelName = "$Package-$Version-py3-none-any.whl"
         $Target = Join-Path $Work $WheelName
+        $SumsPath = Join-Path $Work 'SHA256SUMS'
         Log "Downloading $WheelName"
         Say "from          $BaseUrl"
-        try {
-            Invoke-Download -Url "$BaseUrl/$WheelName" -OutFile $Target
-        } catch {
-            Stop-WithError "could not download $BaseUrl/$WheelName - is v$Version published? See https://github.com/$Repo/releases, or pass -Version / -Wheel."
+        if ($DryRun) {
+            # install.sh runs its downloads through a wrapper that prints instead of executing; here the
+            # two fetches and the check they feed are simply spelled out. A dry run that reaches for the
+            # network is a dry run that needs a network, and this one is for a machine still deciding
+            # whether it trusts the release.
+            Say "[dry-run] download $BaseUrl/$WheelName to $Target"
+            Say "[dry-run] download $BaseUrl/SHA256SUMS to $SumsPath"
+            Say '[dry-run] install only if the wheel matches its entry in SHA256SUMS; refuse on a mismatch'
+            Say '[dry-run] nothing above is downloaded, and the temp directory is not created'
+        } else {
+            try {
+                Invoke-Download -Url "$BaseUrl/$WheelName" -OutFile $Target
+            } catch {
+                Stop-WithError "could not download $BaseUrl/$WheelName - is v$Version published? See https://github.com/$Repo/releases, or pass -Version / -Wheel."
+            }
+            try {
+                Invoke-Download -Url "$BaseUrl/SHA256SUMS" -OutFile $SumsPath
+            } catch {
+                Stop-WithError "could not download $BaseUrl/SHA256SUMS - refusing to install a wheel it cannot verify."
+            }
+            # Reading the manifest is part of the download, not a separate promise. The first version of
+            # this dry-run branch wrapped the two fetches and left this reading outside, so a dry run went
+            # looking for a SHA256SUMS it had deliberately not downloaded and died in Get-Content; the
+            # check the driver now runs on every push caught it the next time round.
+            #
+            # The manifest lists the sdist too, which we never fetch, so it is read by hand instead of
+            # being verified in full: a line for a file we do not want must not refuse a good wheel.
+            $expected = $null
+            foreach ($line in Get-Content -LiteralPath $SumsPath) {
+                $fields = @(($line -split '\s+') | Where-Object { $_ })
+                if ($fields.Count -lt 2) { continue }
+                $listedName = (($fields[1] -replace '^\*', '') -replace '.*[\\/]', '')
+                if ($listedName -eq $WheelName) { $expected = $fields[0].ToLowerInvariant(); break }
+            }
+            if (-not $expected) {
+                Stop-WithError "the release's SHA256SUMS has no line for $WheelName - refusing to install it unverified"
+            }
+            $actual = Get-Sha256 -Path $Target
+            if ($expected -ne $actual) {
+                Write-Host ''
+                Write-Host "error: SHA-256 mismatch for $WheelName"
+                Write-Host "         expected $expected"
+                Write-Host "         got      $actual"
+                Write-Host '         Refusing to install it. If the release was republished, re-check the URL you pinned.'
+                Write-Host ''
+                exit 1
+            }
+            Say "checksum      $actual (matches SHA256SUMS)"
         }
-        $SumsPath = Join-Path $Work 'SHA256SUMS'
-        try {
-            Invoke-Download -Url "$BaseUrl/SHA256SUMS" -OutFile $SumsPath
-        } catch {
-            Stop-WithError "could not download $BaseUrl/SHA256SUMS - refusing to install a wheel it cannot verify."
-        }
-        # The manifest lists the sdist too, which we never fetch, so it is read by hand instead of being
-        # verified in full: a line for a file we do not want must not refuse a perfectly good wheel.
-        $expected = $null
-        foreach ($line in Get-Content -LiteralPath $SumsPath) {
-            $fields = @(($line -split '\s+') | Where-Object { $_ })
-            if ($fields.Count -lt 2) { continue }
-            $listedName = (($fields[1] -replace '^\*', '') -replace '.*[\\/]', '')
-            if ($listedName -eq $WheelName) { $expected = $fields[0].ToLowerInvariant(); break }
-        }
-        if (-not $expected) {
-            Stop-WithError "the release's SHA256SUMS has no line for $WheelName - refusing to install it unverified"
-        }
-        $actual = Get-Sha256 -Path $Target
-        if ($expected -ne $actual) {
-            Write-Host ''
-            Write-Host "error: SHA-256 mismatch for $WheelName"
-            Write-Host "         expected $expected"
-            Write-Host "         got      $actual"
-            Write-Host '         Refusing to install it. If the release was republished, re-check the URL you pinned.'
-            Write-Host ''
-            exit 1
-        }
-        Say "checksum      $actual (matches SHA256SUMS)"
     }
 
     # --------------------------------------------------------------------------------- install
