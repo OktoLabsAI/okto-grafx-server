@@ -67,6 +67,13 @@ $Root = Get-EnvDefault 'OKGIT_ROOT' (Join-Path $Sandbox 'graphs')
 $env:OKTO_GRAFX_SERVER_STATE = $State
 
 $BaseUrl = "http://127.0.0.1:$Port"
+# Programs the installers are meant to run, and so legitimate names even though no cmdlet by that name
+# exists. Anything outside this list has to resolve to a cmdlet, alias, or a function in the same file.
+$ShellCommands = @(
+    'uv', 'python', 'python3', 'python3.11', 'python3.12', 'python3.13', 'py', 'pip', 'pip3',
+    'bash', 'sh', 'oktografx-server', 'oktografx-server.exe', 'oktografx-server.cmd',
+    'curl', 'curl.exe', 'powershell', 'powershell.exe', 'cmd', 'cmd.exe', 'icacls'
+)
 $Log = Join-Path $Sandbox 'log'
 $ErrLog = Join-Path $Sandbox 'log.stderr'
 # Long enough for a cold pip install of the tree on a runner, short enough that a wedged installer is a
@@ -123,6 +130,37 @@ function Invoke-PsScript {
         Die 'the installer never finished: it is waiting on something it did not say it was waiting on'
     }
     return ($proc.ExitCode -eq 0)
+}
+
+function Test-CommandNames {
+    # Every command a script can reach has to be one PowerShell resolves, one the script defines itself,
+    # or one of the programs these scripts exist to run. The parser hands over the first list for free,
+    # so there is no excuse for not asking: this harness once invoked a helper called Note that nothing
+    # had defined, and the failure only appeared at the moment an operator would have hit it.
+    param([string] $Name, [string] $Text)
+    $own = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($found in [regex]::Matches($Text, '(?m)^\s*function\s+([A-Za-z_][A-Za-z0-9_\-]*)')) {
+        [void] $own.Add($found.Groups[1].Value)
+    }
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref] $tokens, [ref] $parseErrors)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $unknown = @()
+    foreach ($command in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        $invoked = $command.GetCommandName()
+        # Nothing static to check when the command itself is a variable, and a name that starts with one
+        # means the parser handed back an expression rather than a command.
+        if (-not $invoked -or $invoked.StartsWith('$')) { continue }
+        if (-not $seen.Add($invoked)) { continue }
+        if ($own.Contains($invoked)) { continue }
+        if ($ShellCommands -contains $invoked) { continue }
+        if (Get-Command -Name $invoked -ErrorAction SilentlyContinue) { continue }
+        $unknown += $invoked
+    }
+    if ($unknown.Count -gt 0) {
+        Die "$Name invokes commands nothing defines: $($unknown -join ', ')"
+    }
 }
 
 function Expect-Literal {
@@ -310,7 +348,9 @@ try {
         if ($undefined.Count -gt 0) {
             Die "$($entry.File) reads a variable it never defines: $($undefined[0]) (and $($undefined.Count - 1) more)"
         }
+        Test-CommandNames -Name $entry.File -Text $text
     }
+    Test-CommandNames -Name 'scripts/test-installer.ps1' -Text (Get-Content -LiteralPath $PSCommandPath -Raw)
     Ok 'the six shipped files hold the encoding, line endings and variable names they promise'
     $psVersion = ($PSVersionTable.PSVersion.ToString())
     # The harness itself may be pwsh 7 on the runner; the scripts are driven by the in-box 5.1 below,
@@ -404,7 +444,9 @@ try {
     if (Invoke-Installer @('-NoRun')) { Die 'install.ps1 reinstalled over a running server instead of refusing first' }
     Expect-Literal 'cannot replace the executable'
     Stop-SandboxDaemon
-    Note 'daemon stopped, daemon.pid left in place: the next rerun has to tell a stale pid from a live one'
+    # Stop-SandboxDaemon leaves daemon.pid where the process fell, which is what a crashed or rebooted
+    # server looks like: the rerun after this one has to read that file as history, not as a live server.
+    Ok 'refused before the package step, with the command that clears it named'
 
     Step 'A rerun over a state directory that requires a token says so'
     if (-not (Invoke-Installer @('-NoRun'))) { Die 'a second install.ps1 exited non-zero' }
