@@ -1,6 +1,6 @@
 name: release
 
-# Publishing a version is pushing a tag: `git tag -a v0.1.0 -m '…' && git push origin v0.1.0`.
+# Publishing a version is pushing a tag: `git tag -a vX.Y.Z -m '…' && git push origin vX.Y.Z`.
 #
 # The wheel is the artifact the installer downloads, and it has to carry the built console inside it
 # (`src/okto_grafx_server/web/**` is package-data), so this workflow builds the console first and then

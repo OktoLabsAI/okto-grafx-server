@@ -131,7 +131,7 @@ treated as a product surface with its own harness rather than as a convenience s
   `tests/test_console_static.py`, the installer harness and the release workflow all grep that marker.
   If you change `web/index.html`, rebuild and keep that marker.
 * `uv tool install` has no `--bin-dir`; point it at `--prefix` with `UV_TOOL_BIN_DIR`.
-* Publishing is pushing a tag: `git tag -a v0.1.0 -m '…' && git push origin v0.1.0`. The release workflow
+* Publishing is pushing a tag: `git tag -a vX.Y.Z -m '…' && git push origin vX.Y.Z`. The release workflow
   builds the console, asserts the wheel carries `index.html` and a hashed asset, builds sdist + wheel,
   writes `SHA256SUMS`, publishes a GitHub Release with both installer scripts, and then installs that
   release on Ubuntu (pip) and macOS (uv) with the same harness.
