@@ -81,6 +81,22 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
+# A terminating error inside a script that nobody can debug on the machine it ran on has to say where it
+# was. Without this, a parameter binding mistake reaches the operator as
+# "ParameterArgumentValidationErrorEmptyStringNotAllowed" with no statement, and the only way to find it
+# is to reproduce on a Windows box they do not have.
+trap {
+    $where = 'an unknown line'
+    if ($_.InvocationInfo -and $_.InvocationInfo.ScriptLineNumber -gt 0) {
+        $where = "line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())"
+    }
+    Write-Host ''
+    Write-Host "error: $($_.Exception.Message)"
+    Write-Host "       at $where"
+    Write-Host ''
+    exit 1
+}
+
 $Repo = 'OktoLabsAI/okto-grafx-server'
 $Binary = 'oktografx-server'
 $Package = 'okto_grafx_server'
