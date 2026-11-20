@@ -562,17 +562,49 @@ try {
                     }
                     if (-not $NoTokenFile) {
                         Set-Content -LiteralPath $TokenPath -Value $Token -Encoding ascii
-                        # The POSIX installer creates this file under umask 177. There is no umask on
-                        # NTFS: the equivalent of "owner only" is to drop the inherited access entries
-                        # and grant the current user, which is what icacls is for. If that fails the
-                        # file still sits inside a profile folder this account owns, but the promise
-                        # would be false, so the script says so instead of staying quiet.
-                        $who = if ($env:USERDOMAIN) { "$env:USERDOMAIN`+$env:USERNAME" } else { $env:USERNAME }
-                        $acl = Invoke-Native 'icacls' @($TokenPath, '/inheritance:r', '/grant:r', "${who}:F")
-                        if ($acl.Code -ne 0) {
-                            Say "token file    $TokenPath - WARNING: could not set an owner-only ACL ($($acl.Lines -join ' ')); the file keeps the folder's inherited permissions"
+                        # The POSIX installer creates this file under umask 177. NTFS has no umask, so the
+                        # equivalent of "owner only" is an access list holding one entry, for this account,
+                        # with nothing inherited from the folder above. That is built here through the ACL
+                        # object rather than icacls: the command line answers in prose, and "1 file
+                        # processed" says nothing about which entries the file ends up carrying - while
+                        # this script's promise is about exactly those entries. So they are set, read back,
+                        # and checked. If it fails the file still sits in a profile folder this account
+                        # owns, but the promise would be false, so the script says so rather than being
+                        # quiet about it.
+                        $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+                        $locked = $false
+                        try {
+                            $acl = Get-Acl -LiteralPath $TokenPath
+                            # Protected, and not preserving what came from the parent: a token file must
+                            # not become readable next month because somebody relaxed its folder.
+                            $acl.SetAccessRuleProtection($true, $false)
+                            # Whatever the profile folder granted - Users, Authenticated Users, an
+                            # Administrators group this account happens to be in - comes out, because the
+                            # claim being made is "this account alone", not "this account plus whoever the
+                            # parent felt like including".
+                            foreach ($explicit in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+                                if ($explicit.IdentityReference.Value -ne $sid.Value) {
+                                    $acl.PurgeAccessRules($explicit.IdentityReference)
+                                }
+                            }
+                            $acl.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+                                $sid,
+                                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                                [System.Security.AccessControl.InheritanceFlags]::None,
+                                [System.Security.AccessControl.PropagationFlags]::None,
+                                [System.Security.AccessControl.AccessControlType]::Allow))
+                            Set-Acl -LiteralPath $TokenPath -AclObject $acl
+                            $written = Get-Acl -LiteralPath $TokenPath
+                            $strangers = @($written.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
+                                Where-Object { ($_.AccessControlType -eq 'Allow') -and ($_.IdentityReference.Value -ne $sid.Value) })
+                            $locked = ($written.AreAccessRulesProtected -and $strangers.Count -eq 0)
+                        } catch {
+                            $locked = $false
+                        }
+                        if ($locked) {
+                            Say "token file    $TokenPath (one entry: this account. nothing inherited)"
                         } else {
-                            Say "token file    $TokenPath (inherited permissions removed, only $who can read it)"
+                            Say "token file    $TokenPath - WARNING: the access list could not be set to this account alone; the file keeps the folder's inherited permissions"
                         }
                     }
                 } else {

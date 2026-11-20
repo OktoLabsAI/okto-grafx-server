@@ -72,7 +72,7 @@ $BaseUrl = "http://127.0.0.1:$Port"
 $ShellCommands = @(
     'uv', 'python', 'python3', 'python3.11', 'python3.12', 'python3.13', 'py', 'pip', 'pip3',
     'bash', 'sh', 'oktografx-server', 'oktografx-server.exe', 'oktografx-server.cmd',
-    'curl', 'curl.exe', 'powershell', 'powershell.exe', 'cmd', 'cmd.exe', 'icacls'
+    'curl', 'curl.exe', 'powershell', 'powershell.exe', 'cmd', 'cmd.exe'
 )
 $Log = Join-Path $Sandbox 'log'
 $ErrLog = Join-Path $Sandbox 'log.stderr'
@@ -161,6 +161,51 @@ function Test-CommandNames {
     if ($unknown.Count -gt 0) {
         Die "$Name invokes commands nothing defines: $($unknown -join ', ')"
     }
+}
+
+function Get-OwnerSid {
+    # The account this harness and these installers run as: the only identity a token file should name.
+    return [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+}
+
+function Set-OwnerOnlyAcl {
+    # Mirrors the recipe in install.ps1 - protect from the parent, purge every other identity, grant this
+    # account. It is repeated here because the harness also writes a token file by hand (the operator who
+    # saved the value the installer printed), and a promise about that file has to be made the way the
+    # installer makes it, not with a chmod that NTFS ignores.
+    param([string] $Path)
+    $sid = Get-OwnerSid
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($explicit in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+        if ($explicit.IdentityReference.Value -ne $sid.Value) { $acl.PurgeAccessRules($explicit.IdentityReference) }
+    }
+    $acl.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+        $sid,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        [System.Security.AccessControl.InheritanceFlags]::None,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Assert-OwnerOnlyAcl {
+    # "Owner only" is a claim about the entries on the file, not about a flag somebody set, so the entries
+    # are read back and anybody else on them is named. On the POSIX side one `ls` says the same thing.
+    param([string] $Path, [string] $Label)
+    $sid = Get-OwnerSid
+    $acl = Get-Acl -LiteralPath $Path
+    if (-not $acl.AreAccessRulesProtected) {
+        Die "$Label still inherits its folder's permissions; 'owner only' would be a false claim"
+    }
+    $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    $foreign = @($rules | Where-Object { ($_.AccessControlType -eq 'Allow') -and ($_.IdentityReference.Value -ne $sid.Value) })
+    if ($foreign.Count -gt 0) {
+        $names = @($foreign | ForEach-Object { $_.IdentityReference.Value }) -join ', '
+        Die "$Label grants access to $names, not to this account alone"
+    }
+    $mine = @($rules | Where-Object { ($_.AccessControlType -eq 'Allow') -and ($_.IdentityReference.Value -eq $sid.Value) })
+    if ($mine.Count -eq 0) { Die "$Label does not grant this account access at all" }
 }
 
 function Expect-Literal {
@@ -464,17 +509,8 @@ try {
     Set-Content -LiteralPath $TokenPath -Value $Token -Encoding ascii
     # The POSIX driver asserts `-rw-------`. On NTFS the equivalent of the installer's umask 177 is an
     # explicit, uninheritable access list, so that is what gets written and asserted here.
-    $who = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $whoName = $who.Translate([System.Security.Principal.NTAccount]).Value
-    & $env:ComSpec /c "icacls `"$TokenPath`" /inheritance:r /grant:r `"$whoName:F`" >nul"
-    $acl = Get-Acl -LiteralPath $TokenPath
-    if (-not $acl.AreAccessRulesProtected) { Die "admin-token still inherits permissions; 'owner only' would be a false claim" }
-    foreach ($accessRule in $acl.Access) {
-        if ($accessRule.AccessControlType -ne 'Allow') { continue }
-        $sid = $null
-        try { $sid = $accessRule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { }
-        if ($sid -and ($sid.Value -ne $who.Value)) { Die "admin-token grants access to $($accessRule.IdentityReference), not only to this account" }
-    }
+    Set-OwnerOnlyAcl -Path $TokenPath
+    Assert-OwnerOnlyAcl -Path $TokenPath -Label 'admin-token'
     if (-not (Invoke-Installer @('-NoRun'))) { Die 'a third install.ps1 exited non-zero' }
     Expect-Literal "token         $Token"
     Expect-Literal 'admin-token rotate'
@@ -618,8 +654,7 @@ db.close()
     $MintedPath = Join-Path $TokenState 'admin-token'
     if (-not (Test-Path -LiteralPath $MintedPath -PathType Leaf)) { Die '-WithAdminToken wrote no admin-token file' }
     if ((Get-Content -LiteralPath $MintedPath -Raw).Trim() -ne $Minted) { Die 'the admin-token file does not hold the value that was printed' }
-    $mintedAcl = Get-Acl -LiteralPath $MintedPath
-    if (-not $mintedAcl.AreAccessRulesProtected) { Die '-WithAdminToken left admin-token inheriting permissions' }
+    Assert-OwnerOnlyAcl -Path $MintedPath -Label '-WithAdminToken admin-token'
     Ok 'the minted token is printed once and stored where the summary says'
     # And the posture that follows from it: the same anonymous request that was administrator at the top
     # of this file is refused, without the harness having to touch the console.
