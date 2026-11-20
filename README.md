@@ -15,6 +15,12 @@
   OpenAPI 3.1 · Elastic License 2.0 + Okto addendum
 </p>
 
+<p align="center">
+  <a href="https://github.com/OktoLabsAI/okto-grafx-server/actions/workflows/ci.yml">
+    <img src="https://github.com/OktoLabsAI/okto-grafx-server/actions/workflows/ci.yml/badge.svg" alt="CI: backend tests, console tests, acceptance gate in Chromium" />
+  </a>
+</p>
+
 ---
 
 The store stays embedded and on local disk. This server holds it open on your behalf; it does not copy
