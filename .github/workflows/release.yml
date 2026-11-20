@@ -70,7 +70,10 @@ jobs:
           # not the console: the built console has to be in the tarball too, or they get a server whose
           # `/` is a 404.
           sdist=$(ls dist/*.tar.gz | head -1)
-          tar -tzf "$sdist" | grep -q 'src/okto_grafx_server/web/index.html' || {
+          # Listed into a file first: `grep -q` closes the pipe as soon as it matches, tar then dies of
+          # SIGPIPE, and with pipefail the pipeline reports failure on a listing that said yes.
+          tar -tzf "$sdist" > /tmp/sdist-contents.txt
+          grep -q 'src/okto_grafx_server/web/index.html' /tmp/sdist-contents.txt || {
             echo "the sdist would build a server with no console"; exit 1; }
           echo "$(basename "$wheel") and $(basename "$sdist") carry the console"
 

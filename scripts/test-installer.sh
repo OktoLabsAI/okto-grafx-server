@@ -147,14 +147,20 @@ step "The console answers on loopback"
 curl -fsS "$BASE/api/v1/health" >"$SANDBOX/health.json"
 grep -q '"status":"ok"' "$SANDBOX/health.json" || die "/api/v1/health did not answer ok"
 grep -q '"databases_registered":0' "$SANDBOX/health.json" || die "a fresh state directory should be empty"
-curl -fsS "$BASE/" | grep -q 'name="oktografx:console"' || die "/ did not serve the built console"
+curl -fsS "$BASE/" >"$SANDBOX/shell.html"
+# A file rather than `curl | grep -q`: grep stops reading the moment it matches, curl then takes a
+# SIGPIPE, and pipefail turns that into a failed check on a console that was served correctly.
+grep -q 'name="oktografx:console"' "$SANDBOX/shell.html" ||
+  die "/ did not serve the built console: $(head -c 200 "$SANDBOX/shell.html")"
 ok "health and the console shell"
 
 TOKEN="$(cat "$OKGIT_STATE/admin-token")"
 curl -fsS -X POST "$BASE/admin/api/login" -H 'Content-Type: application/json' \
   -d "{\"token\":\"$TOKEN\"}" -c "$COOKIES" >"$SANDBOX/login.json"
 grep -q '"signed_in":true' "$SANDBOX/login.json" || die "the printed token did not log in"
-curl -fsS -b "$COOKIES" "$BASE/admin/api/session" | grep -q '"signed_in":true' || die "session cookie not accepted"
+curl -fsS -b "$COOKIES" "$BASE/admin/api/session" >"$SANDBOX/session.json"
+grep -q '"signed_in":true' "$SANDBOX/session.json" ||
+  die "session cookie not accepted: $(cat "$SANDBOX/session.json")"
 ok "the token from the file logs in, and the cookie holds the session"
 
 step "A rerun must not mint a new token"
@@ -223,7 +229,8 @@ ok "the installed environment can create a store"
 
 "$BIN" --state-dir "$OKGIT_STATE" db add "$ROOT_REAL/demo.grafx" --slug demo --read-only \
   >"$SANDBOX/dbadd.json" 2>&1 || die "db add refused a store inside the allowed root: $(cat "$SANDBOX/dbadd.json")"
-"$BIN" --state-dir "$OKGIT_STATE" status 2>&1 | grep -q 'demo ' || die "status did not list the store"
+"$BIN" --state-dir "$OKGIT_STATE" status >"$SANDBOX/status.txt" 2>&1
+grep -q 'demo ' "$SANDBOX/status.txt" || die "status did not list the store: $(cat "$SANDBOX/status.txt")"
 ok "db add accepted a store under the installer's root"
 
 KEY_STATUS="$(curl -sS -o "$SANDBOX/key.json" -w '%{http_code}' -X POST "$BASE/admin/api/keys" \

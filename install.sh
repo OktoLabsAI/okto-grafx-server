@@ -320,7 +320,10 @@ if [ "$DO_INIT" = "1" ]; then
         printf '%s\n' "$INIT_OUT" | sed 's/^/   /' >&2
         fail "'init' refused to create $STATE_DIR"
       fi
-      TOKEN="$(printf '%s\n' "$INIT_OUT" | sed -n 's/^[[:space:]]*\(okga_[A-Za-z0-9_-]\{16,\}\).*/\1/p' | head -1)"
+      # awk over a here-string rather than `printf | sed | head`: the token line is the only thing we
+      # want out of init's output, and a pipeline whose reader quits early is a SIGPIPE waiting to be
+      # mistaken for a failed command under `set -e`/`pipefail`.
+      TOKEN="$(awk '{ if (match($0, /okga_[A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-]+/)) { print substr($0, RSTART, RLENGTH); exit } }' <<<"$INIT_OUT")"
       if [ -z "$TOKEN" ]; then
         printf '%s\n' "$INIT_OUT" | sed 's/^/   /' >&2
         fail "init succeeded but printed no administrator token"
