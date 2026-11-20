@@ -414,6 +414,22 @@ try {
     }
 
     # --------------------------------------------------------------------------------- install
+    # Windows cannot replace an executable a process has open. Rerunning this script against a running
+    # server is routine on Unix - the old binary is unlinked, the daemon carries on from the inode it was
+    # started from, pip never notices - and here it is a WinError 32 from the middle of `pip install`,
+    # with the environment half-written and nothing in the error to say that stopping the server was the
+    # fix. So the script notices first, before it touches anything, and names the command that clears it.
+    # A pid file whose process is gone (crash, reboot, recycled pid) is not a running server: only a live
+    # process that is actually ours stops the install.
+    if (-not $DryRun -and (Test-Path -LiteralPath $daemonPid)) {
+        $recorded = (Get-Content -LiteralPath $daemonPid -Raw).Trim()
+        $serving = $null
+        try { $serving = Get-Process -Id ([int] $recorded) -ErrorAction Stop } catch { $serving = $null }
+        if ($serving -and $serving.ProcessName -like 'oktografx-server*') {
+            Stop-WithError "$Title is running from this state directory (pid $recorded). Windows cannot replace the executable that process started from, so the package step would fail partway through and leave $DataDir half-installed. Stop it first: Stop-Process -Id $recorded"
+        }
+    }
+
     if (-not $DryRun) {
         New-Item -ItemType Directory -Path (Join-Path $Prefix 'bin') -Force | Out-Null
     }
