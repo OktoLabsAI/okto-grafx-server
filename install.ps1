@@ -282,6 +282,7 @@ $BinCmd = Join-Path $Prefix 'bin\oktografx-server.cmd'
 # One name for the pid file, because three separate places need it: the check below that refuses to
 # reinstall over a live server, the write that records the daemon, and the summary line that tells the
 # operator how to stop it. Building the path inline each time is how one of them ends up different.
+$PidPath = Join-Path $StateDir 'daemon.pid'
 $BaseUrl = Get-EnvDefault 'OKG_BASE_URL' "https://github.com/$Repo/releases/download/v$Version"
 
 Log 'Okto Grafx Server'
@@ -429,7 +430,7 @@ try {
         $serving = $null
         try { $serving = Get-Process -Id ([int] $recorded) -ErrorAction Stop } catch { $serving = $null }
         if ($serving -and $serving.ProcessName -like 'oktografx-server*') {
-            Stop-WithError "$Title is running from this state directory (pid $recorded). Windows cannot replace the executable that process started from, so the package step would fail partway through and leave $DataDir half-installed. Stop it first: Stop-Process -Id $recorded"
+            Stop-WithError "The server is running from this state directory (pid $recorded). Windows cannot replace the executable that process started from, so the package step would fail partway through and leave $DataDir half-installed. Stop it first: Stop-Process -Id $recorded"
         }
     }
 

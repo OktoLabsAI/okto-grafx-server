@@ -261,6 +261,55 @@ try {
         if ($clashes.Count -gt 0) {
             Die "$($entry.File) has case-only variable collisions: $($clashes[0]) (and $($clashes.Count - 1) more)"
         }
+        # The two Windows failures this harness has already been written around were one identifier each:
+        # a summary line that interpolated $Title and a running-server check that read $daemonPid, and
+        # neither name was ever defined. Both parsed; both ran everywhere the parsing was checked. Under
+        # Set-StrictMode an undefined name is not an empty string but an error, and the operator meets it
+        # halfway through an install. So every name a script reads must be one it assigns, one it
+        # declares as a parameter, or one PowerShell itself provides.
+        $provided = @(
+            '_', 'args', 'error', 'false', 'true', 'null', 'host', 'home', 'pid', 'pwd', 'input',
+            'foreach', 'psitem', 'matches', 'lastexitcode', 'psversiontable', 'psfile', 'pscommandpath',
+            'pscriptroot', 'psboundparameters', 'invocation', 'exception', 'targetobject', 'stacktrace',
+            'errordetails', 'shelvid', 'ismacos', 'islinux', 'iswindows', 'psdefaultargumentcompletions'
+        )
+        $known = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($name in $provided) { [void] $known.Add($name) }
+        # Deliberately generous about what counts as a definition - a name anywhere on the left of an
+        # assignment, in a param block, in a typed declaration, or as a foreach/catch target is enough.
+        # The point is to catch a name that appears exactly once and never again, not to model scoping.
+        $declarations = @(
+            '(?is)param\s*\((.*?)\)\s*\r?\n',
+            '\[\s*[A-Za-z\.]+\s*\]\s*\$([A-Za-z_][A-Za-z0-9_]*)',
+            '(?:foreach|catch)\s*\(\s*(?:\[.*?\]\s*)?\$([A-Za-z_][A-Za-z0-9_]*)',
+            '\$\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=(?!=)|\+=|-=|\*=|\+\+|--)',
+            '-(?:Variable|OutVariable|ErrorVariable|WarningVariable)\s+("?)([A-Za-z_][A-Za-z0-9_]*)\1'
+        )
+        foreach ($pattern in $declarations) {
+            foreach ($found in [regex]::Matches($text, $pattern)) {
+                foreach ($group in $found.Groups) {
+                    # The param-block pattern captures a whole block, so its names are picked out too.
+                    foreach ($inner in [regex]::Matches($group.Value, '\$\s*([A-Za-z_][A-Za-z0-9_]*)')) {
+                        [void] $known.Add($inner.Groups[1].Value)
+                    }
+                    if ($group.Value -match '^[A-Za-z_][A-Za-z0-9_]*$') { [void] $known.Add($group.Value) }
+                }
+            }
+        }
+        $lineNo = 0
+        $undefined = @()
+        foreach ($line in ($text -split "\r?\n")) {
+            $lineNo++
+            # (?![A-Za-z0-9_:]) keeps the provider-qualified names out ($env:PATH is not a script variable)
+            # without letting the backtracker quietly match a prefix of one.
+            foreach ($found in [regex]::Matches($line, '\$\{?([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_:])')) {
+                $name = $found.Groups[1].Value
+                if (-not $known.Contains($name)) { $undefined += "$name at line $lineNo" }
+            }
+        }
+        if ($undefined.Count -gt 0) {
+            Die "$($entry.File) reads a variable it never defines: $($undefined[0]) (and $($undefined.Count - 1) more)"
+        }
     }
     Ok 'the six shipped files hold the encoding, line endings and variable names they promise'
     $psVersion = ($PSVersionTable.PSVersion.ToString())
