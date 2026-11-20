@@ -1,0 +1,195 @@
+@import "tailwindcss";
+
+/*
+ * The console wears the same clothes as https://oktolabs.ai/platform/grafx/.
+ *
+ * These tokens are that page's own design values, read out of its compiled stylesheet rather than
+ * eyeballed from a screenshot: a near-black blue ground with two raised surfaces, a single light
+ * ink, hairlines made of translucent periwinkle, and one accent family that runs cyan → blue →
+ * violet. IBM Plex Sans carries the prose, IBM Plex Mono carries anything a machine produced —
+ * identifiers, numbers, statements. Both are served by this daemon: the CSP is `default-src 'self'`,
+ * so nothing here is fetched from a CDN.
+ */
+@theme {
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Ground and surfaces. */
+  --color-void: #06070b; /* page */
+  --color-panel: #0b0d14; /* cards, sections */
+  --color-raised: #0f1018; /* headers, table heads, hover */
+  --color-deep: #090b11; /* code blocks, inputs: recessed, not a second card */
+  --color-rail: #080a10; /* the navigation column */
+
+  /* Hairlines are periwinkle at low alpha, so they read as light on any of the surfaces above. */
+  --color-line: #aeb7df21;
+  --color-line-strong: #aeb7df42;
+
+  /* Ink. */
+  --color-fg: #f3f3fa;
+  --color-cell: #d0d3e3;
+  --color-muted: #979bad;
+
+  /* One accent family, cyan first, and the three states. */
+  --color-accent: #41d7ee;
+  --color-azure: #5c9cef;
+  --color-violet: #9f78fc;
+  --color-ok: #44d2e5;
+  --color-warn: #e2b13c;
+  --color-danger: #f0938c;
+
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+
+  /* The site's labels are uppercase and loose; its prose is tight. */
+  --tracking-eyebrow: 0.1em;
+}
+
+/* Everything below is base-level: Tailwind's utilities live in a later cascade layer, so a class
+   like `text-muted` or `text-fg` on an <a> wins over the defaults here. Left unlayered, these rules
+   would beat every utility and paint all links — brand, nav, back links — in the accent. */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-void);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: #41d7ee3d;
+  }
+
+  /* Anything a machine emitted reads as a machine emitted it. */
+  code,
+  kbd,
+  pre,
+  samp,
+  var {
+    font-family: var(--font-mono);
+    font-feature-settings: "zero" 1;
+  }
+
+  /* Prose links take the accent; components that set their own colour say so with a utility class. */
+  a {
+    color: var(--color-accent);
+    text-decoration-color: #41d7ee59;
+    text-underline-offset: 2px;
+  }
+  a:hover {
+    text-decoration-color: var(--color-accent);
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-panel;
+    /* One hairline of light along the top edge, then a soft pool below: the site's depth cue. */
+    box-shadow: inset 0 1px 0 #ffffff08, 0 20px 44px -32px #000000cc;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1.5
+      text-[13px] font-medium text-fg transition-[background,border-color,color] duration-150
+      hover:border-line-strong hover:bg-[#161a24] active:translate-y-px
+      disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-raised;
+  }
+  /* Primary is the cyan, kept dark enough that light ink stays readable on it. */
+  .btn-primary {
+    @apply border-[#41d7ee5c] bg-[#0b2a33] text-[#9fe9f8]
+      hover:border-[#41d7eeb8] hover:bg-[#0e343f];
+  }
+  .btn-violet {
+    @apply border-[#9f78fc5c] bg-[#1a1430] text-[#cfbdfc] hover:border-[#9f78fcb8] hover:bg-[#211a3c];
+  }
+  .btn-danger {
+    @apply border-[#f0938c5c] bg-[#2b1517] text-[#f8c9c5] hover:border-[#f0938cb8] hover:bg-[#361a1d];
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-line bg-deep px-2 py-1.5 text-[13px] text-fg
+      outline-none transition-colors duration-150 placeholder:text-[#6b6f80]
+      focus:border-[#41d7ee9e] focus:ring-2 focus:ring-[#41d7ee29];
+  }
+
+  /* Eyebrow: what the site uses above a value, and what this console uses for every field. */
+  .label {
+    @apply mb-1 block text-[10.5px] font-semibold uppercase tracking-eyebrow text-muted;
+  }
+  .eyebrow {
+    @apply text-[10.5px] font-medium uppercase tracking-eyebrow text-muted;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-md border border-line bg-[#10131a]
+      px-1.5 py-0.5 text-[11px] text-muted;
+  }
+  .badge-ok {
+    @apply border-[#44d2e552] bg-[#07262c] text-[#8fe6f1];
+  }
+  .badge-warn {
+    @apply border-[#e2b13c52] bg-[#241d0d] text-[#eec878];
+  }
+  .badge-danger {
+    @apply border-[#f0938c52] bg-[#2a1416] text-[#f6b6b1];
+  }
+  .badge-violet {
+    @apply border-[#9f78fc52] bg-[#191231] text-[#c8b4fb];
+  }
+
+  .th {
+    @apply sticky top-0 z-10 border-b border-line bg-raised px-2 py-1.5 text-left
+      text-[10.5px] font-semibold uppercase tracking-eyebrow text-muted;
+  }
+  .td {
+    @apply border-b border-line px-2 py-1 align-top font-mono text-[12px] text-cell;
+  }
+
+  .tab {
+    @apply inline-flex items-center gap-1.5 rounded-t-lg border border-b-0 border-line
+      bg-[#090b11] px-3 py-1.5 text-[13px] text-muted transition-colors duration-150
+      hover:text-fg;
+  }
+  .tab-active {
+    @apply border-[#41d7ee5c] bg-panel text-fg;
+    /* The active tab is joined to its panel by a cyan edge, not by a filled block. */
+    box-shadow: inset 0 2px 0 var(--color-accent);
+  }
+
+  /* A 6px mark for state where the site uses one: no text, no colour alone (it is always paired
+     with a word in the component that uses it). */
+  .dot {
+    @apply inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current;
+  }
+}
+
+.cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+
+.scroll-thin::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #aeb7df26;
+  border-radius: 6px;
+}
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: #aeb7df42;
+}

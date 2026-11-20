@@ -1,0 +1,124 @@
+name: ci
+
+# The same gate a contributor runs locally. Split so a console typo does not cost three minutes of
+# engine time, and so the browser half — the slow one — can fail with its own artifact.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (pytest)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
+      - name: Lint
+        run: ruff check src tests
+      - name: Tests
+        # The suite opens real stores: run it with the project interpreter, in a temp dir per test.
+        run: python -m pytest tests -q -p no:cacheprovider --junitxml=pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-${{ matrix.python-version }}
+          path: pytest.xml
+          if-no-files-found: ignore
+
+  console:
+    name: console (vitest + tsc + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: web
+      - name: Tests
+        run: npx vitest run
+        working-directory: web
+      - name: Types
+        run: npx tsc -p tsconfig.json --noEmit
+        working-directory: web
+      - name: Build
+        # The build output is committed on purpose (a wheel ships the console), so this proves the
+        # committed artifact still matches the source.
+        run: npm run build
+        working-directory: web
+      - name: The committed console is up to date
+        run: git diff --exit-code -- src/okto_grafx_server/web || {
+                 echo "::error::src/okto_grafx_server/web is stale — run (cd web && npm run build) and commit.";
+                 git status --porcelain -- src/okto_grafx_server/web | head; exit 1; }
+
+  gate:
+    name: acceptance gate (no browser)
+    needs: [backend, console]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e '.[dev]'
+      - name: REST, WebSocket, MCP, OpenAPI, metrics, SPA, audit, README examples
+        env:
+          PORT: "8899"
+          WITH_BROWSER: "0"
+        run: ./scripts/acceptance.sh
+
+  browser:
+    name: acceptance gate (console in Chromium)
+    needs: [backend, console]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: python -m pip install -e '.[dev]'
+      - run: npm ci
+        working-directory: web
+      - name: Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: Console flow, plus the transport gate
+        env:
+          PORT: "8900"
+          WITH_README: "0"
+        run: ./scripts/acceptance.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: console-screenshots
+          path: /tmp/okg-acceptance.*/shots
+          if-no-files-found: ignore
