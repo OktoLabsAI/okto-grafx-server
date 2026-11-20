@@ -18,6 +18,10 @@ def test_a_browser_route_gets_the_console_shell(daemon) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert 'id="root"' in response.text
+    # `id="root"` is what a placeholder would have too. This marker is the console saying the bundle it
+    # shipped with is the thing being served — the installer and CI grep for the same string, so if the
+    # console ever stops emitting it, this test fails here instead of a release check failing in the field.
+    assert 'name="oktografx:console"' in response.text
 
 
 def test_a_bundled_asset_is_served(daemon) -> None:

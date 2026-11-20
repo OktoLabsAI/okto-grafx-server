@@ -101,8 +101,78 @@ statistics, on a stated snapshot — including when that answer is a refusal.
   creates a store; it attaches to ones that exist.
 * A filesystem that supports the engine's durability requirements, and one process holding a given
   store's writer lease.
+* **`curl`** and a POSIX shell, for the one-command installer. It works on the bash macOS ships (3.2),
+  which is what `curl … | bash` runs there.
 
 ## Install
+
+### With one command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.0/install.sh | bash
+```
+
+It puts `oktografx-server` in `~/.local/bin` — with `uv tool install` when `uv` is present, otherwise in a
+venv under `~/.local/share` — creates the state directory, starts the daemon on `127.0.0.1:8737`, waits
+until `/api/v1/health` answers, and prints the administrator token once. The token is shown once by the
+server, so the installer also keeps a copy at `~/.local/state/okto-grafx-server/admin-token`, mode `0600`.
+Then open <http://127.0.0.1:8737/> and paste the token.
+
+Flags go after `bash -s --`. `--dry-run` prints every command and changes nothing, which is a reasonable
+thing to ask of anything you pipe into a shell:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.0/install.sh \
+  | bash -s -- --port 8899 --root ~/graphs --dry-run
+```
+
+| flag | default | what it decides |
+| --- | --- | --- |
+| `--prefix DIR` | `~/.local` | where the `oktografx-server` command goes |
+| `--state-dir DIR` | `~/.local/state/okto-grafx-server` | `server.toml`, `server.db`, the token file |
+| `--root DIR` | `~/graphs` | the only directory `db add` may read stores from; created if missing |
+| `--port N` | `8737` | loopback port |
+| `--installer auto\|uv\|pip` | `auto` | which installer to use (`uv` is preferred when present) |
+| `--python PATH` | first 3.11+ on PATH | interpreter for the venv (uv supplies its own) |
+| `--wheel FILE`, `--from-tree DIR` | — | install a local artifact instead of the release |
+| `--no-init`, `--no-run`, `--no-token-file` | off | install the command only, do not start, keep the token out of the filesystem |
+
+Two behaviours are deliberate:
+
+* **A rerun never re-initialises.** Running `init` again mints a new administrator token and invalidates
+  the old one, so the installer stops when `<state>/server.toml` exists and tells you to rotate on purpose
+  with `oktografx-server admin-token rotate` — the control plane stores hashes, so rotation is the only
+  recovery when a token is lost.
+* **The checksum proves transport, not authenticity.** The wheel is fetched from the GitHub release for
+  this version and its SHA-256 is compared against that release's `SHA256SUMS`. That catches a truncated
+  or substituted download. It does not prove the release is genuine, since both files come from the same
+  place — so pin the URL to a tag, as above, rather than to `latest`, and if that distinction matters in
+  your threat model, download both files, check them yourself, and run the script from disk:
+
+```bash
+curl -fsSLO https://github.com/OktoLabsAI/okto-grafx-server/releases/download/v0.1.0/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS        # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
+bash install.sh --root ~/graphs
+```
+
+The daemon listens on loopback over plain HTTP: anything else on this machine can reach the port, and
+anything on this machine with filesystem access can open the same store directly. The daemon the installer
+starts is a `nohup` background process, not a supervised service — for launchd or systemd, see
+[Running as a service](#running-as-a-service).
+
+To take it back out:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.0/uninstall.sh | bash
+```
+
+That removes the command and the environment it lives in and stops the daemon belonging to that state
+directory. It leaves `server.toml`, `server.db`, the audit trail and the token where they are — a
+registration is a reference to a store that lives wherever you put it, and an uninstall should not rewrite
+that. `--purge-state` removes the control plane deliberately, and still never deletes a store.
+
+The package is not on PyPI yet, so `pip install okto-grafx-server` does not work today; this release and
+the source below are the two ways in.
 
 ### From this repository
 

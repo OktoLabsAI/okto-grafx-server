@@ -7,6 +7,11 @@
     <link rel="icon" type="image/svg+xml" href="/okto-grafx-icon.svg" />
     <meta name="theme-color" content="#06070b" />
     <meta name="referrer" content="no-referrer" />
+    <!-- The daemon serves this bundle out of its own package: with a CSP of default-src 'self' there is
+         no CDN to fetch it from, so "the console loaded" and "the server answered 200" are different
+         claims. Tests and the installer assert on this marker to tell a served console apart from a
+         placeholder, a directory listing, or a stale build. -->
+    <meta name="oktografx:console" content="1" />
   </head>
   <body>
     <div id="root"></div>

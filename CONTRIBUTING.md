@@ -23,16 +23,25 @@ system Python is usually older than 3.11.
 ## The gate: what has to pass before a review
 
 ```bash
-.venv/bin/python -m pytest tests -q                              # 253 backend tests
-(cd web && npx vitest run && npx tsc --noEmit && npm run build)   # 51 console tests
+.venv/bin/python -m pytest tests -q                              # 257 backend tests
+(cd web && npx vitest run && npx tsc --noEmit && npm run build)   # 74 console tests
 .venv/bin/ruff check src tests                                     # lint (line length 110)
 ./scripts/acceptance.sh                                            # the end-to-end gate
+./scripts/test-installer.sh                                        # install → query → uninstall
 ```
 
 `scripts/acceptance.sh` is the interesting one. It builds a fresh state directory, seeds three real
 stores, starts a daemon, runs 84 transport/API checks against two of them, drives the console in a real
-browser against the third (30 steps), and then runs **every `curl` example in README.md** against the live
+browser against the third (32 steps), and then runs **every `curl` example in README.md** against the live
 daemon. Documentation drift fails the build on purpose.
+
+`scripts/test-installer.sh` drives `install.sh` and `uninstall.sh` the way an operator would: install,
+`init`, start, log in with the token file, create a store with the *installed* environment, attach it,
+query it through the data plane, get a write refused with a read-only key, uninstall, and check that the
+state directory survived. Point it at the tree with `OKGIT_SOURCE="--from-tree $PWD"`, or leave
+`OKGIT_SOURCE` empty to install the published release and verify its checksum. CI runs it from the tree on
+Ubuntu (`--installer pip`) and macOS (`--installer uv`); the release workflow runs it against the artifacts
+that tag just published.
 
 ```bash
 PORT=9000 KEEP=1 ./scripts/acceptance.sh    # keep the workspace; prints how to re-attach
@@ -101,6 +110,31 @@ If a check is unreachable for a legitimate reason, fix the check or the code —
   configuration block, the Settings screen, and a test that the refusal happens **before** the socket
   opens when the value is something the engine cannot honour.
 * Store paths are validated against `allowed_roots` at registration *and* at open time. Keep both.
+
+## Packaging and the installer
+
+`install.sh` is the first thing most people run and it is usually piped straight into a shell, so it is
+treated as a product surface with its own harness rather than as a convenience script.
+
+* It has to work on **the bash macOS ships (3.2)** — that is what `curl … | bash` runs there. Check with
+  `OKGIT_BASH=/bin/bash ./scripts/test-installer.sh`; CI on macOS gets it for free.
+* `--dry-run` prints commands and **touches no files at all**. Anything new in the script has to be behind
+  the `run`/`remove` wrappers or inside a `[ "$DRY" != "1" ]` branch, and the harness asserts the
+  directories stay absent.
+* **Never `init` over an existing state directory.** A second `init` mints a new administrator token and
+  invalidates the one the operator is using; the script stops and points at `admin-token rotate` instead.
+* Resolve `--root` with `cd "$dir" && pwd -P` *after* creating it: the daemon refuses a store path with a
+  symlinked component, and on macOS `/tmp` is one, so an unresolved root would turn every later `db add`
+  into a confusing refusal. The harness keeps its sandbox under `$TMPDIR` for the same reason.
+* The wheel must contain the built console (`web/**` is package-data), and the console emits
+  `<meta name="oktografx:console">` so "the console is being served" is a claim a test can check —
+  `tests/test_console_static.py`, the installer harness and the release workflow all grep that marker.
+  If you change `web/index.html`, rebuild and keep that marker.
+* `uv tool install` has no `--bin-dir`; point it at `--prefix` with `UV_TOOL_BIN_DIR`.
+* Publishing is pushing a tag: `git tag -a v0.1.0 -m '…' && git push origin v0.1.0`. The release workflow
+  builds the console, asserts the wheel carries `index.html` and a hashed asset, builds sdist + wheel,
+  writes `SHA256SUMS`, publishes a GitHub Release with both installer scripts, and then installs that
+  release on Ubuntu (pip) and macOS (uv) with the same harness.
 
 ## Committing
 

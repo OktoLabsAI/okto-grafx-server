@@ -73,6 +73,35 @@ jobs:
                  echo "::error::src/okto_grafx_server/web is stale — run (cd web && npm run build) and commit.";
                  git status --porcelain -- src/okto_grafx_server/web | head; exit 1; }
 
+  installer:
+    name: installer (${{ matrix.os }}, ${{ matrix.installer }})
+    # install.sh is a product surface: it is the first thing most people run, it is usually piped
+    # straight into a shell, and it has to work on the bash macOS ships, not only the one a developer
+    # installed. This job runs the same driver the release workflow runs, with the source pointed at the
+    # working tree instead of the published artifacts.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            installer: pip
+          - os: macos-latest
+            installer: uv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install, init, start, attach a store, query it, uninstall
+        env:
+          OKGIT_SOURCE: --from-tree ${{ github.workspace }}
+          OKGIT_INSTALLER: ${{ matrix.installer }}
+          OKGIT_PYTHON: python3
+          OKGIT_PORT: "8791"
+        run: ./scripts/test-installer.sh
+
   gate:
     name: acceptance gate (no browser)
     needs: [backend, console]

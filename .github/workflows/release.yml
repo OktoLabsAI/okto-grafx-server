@@ -1,0 +1,182 @@
+name: release
+
+# Publishing a version is pushing a tag: `git tag -a v0.1.0 -m '…' && git push origin v0.1.0`.
+#
+# The wheel is the artifact the installer downloads, and it has to carry the built console inside it
+# (`src/okto_grafx_server/web/**` is package-data), so this workflow builds the console first and then
+# asserts the wheel actually contains it. A release whose console is missing would install a server that
+# answers 404 on `/` — which is exactly the failure a build step should refuse to publish.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build and publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the console
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: The console must be in the tree before packaging
+        run: |
+          set -euo pipefail
+          test -f src/okto_grafx_server/web/index.html
+          asset=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' src/okto_grafx_server/web/index.html | head -1)
+          test -n "$asset"
+          test -f "src/okto_grafx_server/web/$asset"
+          echo "console: index.html + $asset"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip build
+          python -m build
+          ls -l dist
+
+      - name: The artifacts must carry the console
+        run: |
+          set -euo pipefail
+          wheel=$(ls dist/*.whl | head -1)
+          python -m zipfile -l "$wheel" > /tmp/wheel-contents.txt
+          grep -q 'okto_grafx_server/web/index.html' /tmp/wheel-contents.txt
+          grep -q 'okto_grafx_server/web/assets/index-.*\.js' /tmp/wheel-contents.txt
+          rm -rf /tmp/wheel-x
+          python -m zipfile -e "$wheel" /tmp/wheel-x
+          grep -q 'name="oktografx:console"' /tmp/wheel-x/okto_grafx_server/web/index.html
+          # Someone with no Node on the box will `pip install` the sdist, which rebuilds the package but
+          # not the console: the built console has to be in the tarball too, or they get a server whose
+          # `/` is a 404.
+          sdist=$(ls dist/*.tar.gz | head -1)
+          tar -tzf "$sdist" | grep -q 'src/okto_grafx_server/web/index.html' || {
+            echo "the sdist would build a server with no console"; exit 1; }
+          echo "$(basename "$wheel") and $(basename "$sdist") carry the console"
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./*.whl ./*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Ship the installer beside the artifacts
+        run: cp install.sh uninstall.sh dist/
+
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          wheel=$(basename "$(ls dist/*.whl | head -1)")
+          sdist=$(basename "$(ls dist/*.tar.gz | head -1)")
+          cat > dist/NOTES.md <<EOF
+          Okto Grafx Server ${GITHUB_REF_NAME} — a single-user, loopback server that holds a Grafx store
+          open and serves it over REST, MCP and a web console.
+
+          **One command**
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/install.sh | bash
+          \`\`\`
+
+          It installs \`oktografx-server\` into \`~/.local\`, creates a state directory (never over an
+          existing one), starts the daemon on 127.0.0.1:8737 and prints the administrator token once.
+          Flags go through \`bash -s --\`, and \`--dry-run\` shows every command it would run.
+
+          **Verify what you downloaded**
+
+          \`\`\`bash
+          curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${wheel}
+          curl -fsSLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/SHA256SUMS
+          sha256sum -c --ignore-missing SHA256SUMS || shasum -a 256 -c --ignore-missing SHA256SUMS
+          \`\`\`
+
+          The checksum comes from this same release, so it proves the download was not truncated or
+          altered in transit; it does not prove the release is authentic. Pin the URL to a tag, and if
+          that distinction matters to your threat model, do not pipe a URL into a shell.
+
+          **Assets**
+
+          - \`${wheel}\` — the package, with the built console inside it
+          - \`${sdist}\` — the source distribution
+          - \`SHA256SUMS\` — checksums for both
+          - \`install.sh\` / \`uninstall.sh\` — the scripts above, so a pinned URL always resolves
+
+          Uninstall: \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/uninstall.sh | bash\`.
+          It removes the command and its environment and leaves the state directory and every store alone.
+          EOF
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.whl dist/*.tar.gz dist/SHA256SUMS dist/install.sh dist/uninstall.sh \
+            --title "Okto Grafx Server ${GITHUB_REF_NAME}" \
+            --notes-file dist/NOTES.md \
+            --verify-tag
+          gh release view "$GITHUB_REF_NAME" --json name,assets --jq '.name, (.assets[].name)'
+
+  verify:
+    name: install from the release (${{ matrix.os }}, ${{ matrix.installer }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            installer: pip
+          - os: macos-latest
+            installer: uv
+    steps:
+      # The installer under test is the one the tag publishes; the harness driving it is the one in the
+      # tree. With OKGIT_SOURCE empty, install.sh downloads the release wheel and checks its SHA-256, so
+      # this is the operator's path end to end — the only way to notice a published artifact is broken.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the scripts the tag publishes
+        run: |
+          set -euo pipefail
+          RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}"
+          curl -fsSL "$RAW/install.sh" -o "$RUNNER_TEMP/install.sh"
+          curl -fsSL "$RAW/uninstall.sh" -o "$RUNNER_TEMP/uninstall.sh"
+          # A pinned URL has to hand out the bytes that tag carries. If the release was edited, or the
+          # wrong file uploaded, say so here rather than testing something nobody is going to run.
+          diff "$RUNNER_TEMP/install.sh" install.sh
+          diff "$RUNNER_TEMP/uninstall.sh" uninstall.sh
+
+      - name: Install, init, start, attach a store, query it, uninstall
+        env:
+          OKGIT_INSTALL: ${{ runner.temp }}/install.sh
+          OKGIT_UNINSTALL: ${{ runner.temp }}/uninstall.sh
+          OKGIT_SOURCE: ""
+          OKGIT_INSTALLER: ${{ matrix.installer }}
+          OKGIT_PYTHON: python3
+          OKGIT_PORT: "8799"
+        run: ./scripts/test-installer.sh
