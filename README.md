@@ -95,7 +95,8 @@ statistics, on a stated snapshot — including when that answer is a refusal.
 
 * **Python 3.11+** (the engine builds and opens stores natively; no JVM, no server process besides this one).
 * **`okto-grafx`** — the embedded library, installed automatically as a dependency.
-* **Node 20+** *only* if you want to rebuild the operator console from source. The built console is in
+* **Node 20.19+ or 22.12+** *only* if you want to rebuild the operator console from source (`web/`
+  declares those engines; CI builds on 22). The built console is in
   this repository, so the daemon can serve `/` right after install.
 * **Stores** — directories created by `oktografx create` or by `oktografx-python`. The server never
   creates a store; it attaches to ones that exist.
@@ -136,6 +137,11 @@ curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.0
 | `--python PATH` | first 3.11+ on PATH | interpreter for the venv (uv supplies its own) |
 | `--wheel FILE`, `--from-tree DIR` | — | install a local artifact instead of the release |
 | `--no-init`, `--no-run`, `--no-token-file` | off | install the command only, do not start, keep the token out of the filesystem |
+
+The same choices are environment variables, which is how CI and an air-gapped machine drive it without
+flags: `OKG_PREFIX`, `OKG_GRAPH_ROOT`, `OKG_PORT`, `OKTO_GRAFX_SERVER_STATE`, `XDG_DATA_HOME` and
+`XDG_STATE_HOME`, plus `OKG_BASE_URL` to fetch the wheel and its `SHA256SUMS` from a mirror — or a
+`file://` directory — instead of the GitHub release. `install.sh --help` lists them.
 
 Two behaviours are deliberate:
 
@@ -427,8 +433,9 @@ curl -sS -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/j
  "duration_ms":5.21,"snapshot_lsn":41}
 ```
 
-`mode` is `rows` (default) or `graph`. Values longer than `max_query_value_characters` are truncated
-and say so in `warnings`.
+The body is `query`, `parameters`, `limit`, `timeout_seconds` (≤ 600) and `explain`. With `explain: true`
+the answer carries `plan` next to the rows; `GET …/explain` is the same operator tree on its own. Values
+longer than `max_query_value_characters` are truncated and say so in `warnings`.
 
 Two rules hold across the whole data plane. **There is no cursor:** every request opens its own read
 transaction on a fresh snapshot, so "page 2" is a different database than page 1 unless you widen the
@@ -480,6 +487,10 @@ curl -sS -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/j
 
 curl -sS -H "Authorization: Bearer $KEY" "$BASE/api/v1/databases/docs/neighbors?table=Doc&record_id=1&limit=200"
 ```
+
+`mode` is `projection` (the default, built from `node_tables` and `relationship_tables`) or `query`,
+which draws what a statement returns and so takes `query` and `parameters` instead of tables. It is a
+different request from `POST …/query`, which answers rows and knows nothing about captures.
 
 Both endpoints of a selected relationship must be selected as well, and `weight_columns` must name a
 property for **every** selected relationship table — a partial map is refused with
@@ -592,7 +603,7 @@ curl -sS -c cookies.txt -X POST "$BASE/admin/api/login" -H 'content-type: applic
 | GET | `/roots` | the candidate store directories the daemon found under `allowed_roots` |
 | GET/POST | `/databases` | list registrations; register by reference |
 | POST | `/databases/inspect` | read the store's own facts before registering it |
-| GET/PATCH/DELETE | `/databases/{slug}` | the record; change `name`, `read_only`, `allow_writes`, `enabled`, `open_policy`, `note` |
+| GET/PATCH/DELETE | `/databases/{slug}` | the record; change `name`, `read_only`, `allow_writes`, `enabled`, `open_policy`, `note`, `options` — a new `options` map is re-validated against the library table, so a door opens only onto settings the engine actually supports |
 | POST | `/databases/{slug}/open` · `/close` · `/eject` | handle control (`eject` forgets nothing, `close` drains) |
 | POST | `/databases/{slug}/actions/{action}` | maintenance as a job: `202 {"job_id":…}`, body `{"arguments":{…}}` |
 | POST | `/databases/{slug}/ddl` | up to 64 statements, one write transaction |
@@ -614,7 +625,7 @@ Everything the console does, without a browser or a socket — useful for bootst
 the case where you have lost the admin token.
 
 ```
-oktografx-server [--state-dir DIR] [--log-level LEVEL] <verb>
+oktografx-server [--state-dir DIR] [--log-level LEVEL] [--version] <verb>
 ```
 
 | Command | What it does |
@@ -622,10 +633,10 @@ oktografx-server [--state-dir DIR] [--log-level LEVEL] <verb>
 | `init [--root DIR] [--port N]` | Create the state directory, write `server.toml`, mint the admin token. Re-running keeps `server.toml` and the registrations but mints a **new** token and invalidates the old one — it says so on stderr. |
 | `run [--host H] [--port N] [--i-understand-remote-binding] [--i-understand-remote-store-metrics]` | Run the daemon in the foreground. |
 | `status` / `config` | Registered stores; the effective configuration as JSON. |
-| `db add PATH --slug S [--name N] [--read-only\|--writable] [--allow-writes] [--open-policy lazy\|pinned] [--option K=V]` | Attach an existing store **by reference**. |
+| `db add PATH --slug S [--name N] [--read-only\|--writable] [--allow-writes] [--open-policy lazy\|pinned] [--option K=V] [--i-understand-remote-store-metrics]` | Attach an existing store **by reference**. |
 | `db list` / `db remove SLUG` | List; forget a registration (files are untouched). |
 | `key create NAME [--db S] [--db S2] [--allow-writes]` | Mint a data-plane key. |
-| `key list` / `key revoke --id N` | List (never secrets); revoke. |
+| `key list` / `key revoke KEY_ID` | List (never secrets); revoke. |
 | `admin-token rotate` | Mint a new administrator token and invalidate the old one. |
 
 `--state-dir` selects a different state directory (default `~/.local/state/okto-grafx-server`). The CLI
@@ -640,7 +651,7 @@ run against a state directory owned by a daemon on another machine.
 | `GET /metrics` | Prometheus text; send `Accept: application/openmetrics-text` for OpenMetrics 1.0.0 (`# UNIT`, closing `# EOF`). Every family declares its `# TYPE`, labelled per-store samples included. **Off unless `metrics_enabled = true`** — the endpoint has no authentication. |
 | `GET /api/v1/openapi.json` | OpenAPI 3.1, 37 paths, both doors documented separately, the error envelope in the schema. |
 | `GET /api-docs` | the interactive documentation of the same file. |
-| `GET /` and any SPA route | the console, with deep-link fallback; hashed assets are cached, `index.html` never is. |
+| `GET /` and any SPA route | the console, with deep-link fallback. Nothing sets `Cache-Control`: browsers revalidate by `ETag`, and a rebuild changes every hashed asset name, so a stale bundle cannot survive a reload. |
 
 ```bash
 curl -sS "$BASE/api/v1/health" | jq
@@ -800,6 +811,12 @@ audit_retention_days = 30
 * Per-store creation options (`page_size`, `wal_*`, `buffer_budget_bytes`, …) are set at attach time and
   validated against the table the installed library reports — an option the library adds appears in the
   console without a frontend release.
+* [Limits and budgets](#limits-and-budgets) is the complete list of the rest — including
+  `idle_session_ttl_seconds`, `handle_idle_ttl_seconds`, `max_request_bytes`, `max_ws_batches` and
+  `max_query_value_characters`, which the sample above leaves out because you rarely touch them.
+* `metrics_host` and `metrics_port` are accepted, and `metrics_host` is refused off loopback, but **nothing
+  binds them today**: the exposition is served by the daemon itself on `/metrics`. Treat them as unwired,
+  not as a way to move the endpoint somewhere else.
 
 ## Limits and budgets
 
@@ -1003,8 +1020,8 @@ loaded from elsewhere simply would not render.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q              # 253 tests: unit, contract, live-engine, transport, CLI
-(cd web && npx vitest run && npx tsc --noEmit && npm run build)   # 51 console tests
+.venv/bin/python -m pytest tests -q              # 257 tests: unit, contract, live-engine, transport, CLI
+(cd web && npx vitest run && npx tsc --noEmit && npm run build)   # 74 console tests
 ./scripts/acceptance.sh                          # the whole gate, below
 ```
 
@@ -1016,7 +1033,7 @@ two-process case (the CLI reading a store the daemon is serving).
 `scripts/acceptance.sh` is the end-to-end gate: it seeds three stores, runs `init`, flips
 `metrics_enabled`, starts a real daemon, then runs `scripts/acceptance.py` against two of them (84 checks
 each: REST, WS writes with rollback, MCP scoping, OpenAPI, metrics, SPA, audit), drives the console in a
-real browser against the third (30 steps: login, attach by reference, the checkpoint-complete remedy,
+real browser against the third (32 steps: login, attach by reference, the checkpoint-complete remedy,
 maintenance jobs, query, WebGL graph, three search regimes, key issuance, a refused write over HTTP and
 over the socket, jobs, audit, settings), and finally runs every `curl` example in this file against the
 live daemon (`scripts/readme-check.sh`, 25 examples, mints and revokes its own key), so the documentation
@@ -1032,7 +1049,17 @@ WITH_README=0 ./scripts/acceptance.sh        # skip the documentation examples
 (cd web && node e2e/console.mjs --base-url http://127.0.0.1:8737 \
   --admin-token okga_… --store /abs/path/to/graphs/newstore --shots /tmp/shots)
 ./scripts/readme-check.sh http://127.0.0.1:8737 okga_… docs   # just the README
+OKGIT_SOURCE="--from-tree $PWD" ./scripts/test-installer.sh       # the installer, end to end, in a sandbox
 ```
+
+`scripts/test-installer.sh` drives `install.sh` and `uninstall.sh` the way an operator would — install,
+`init`, start, log in with the token file, create a store with the **installed** environment, attach it,
+read it over the data plane, get a write refused with a read-only key, uninstall, keep the state — and it
+runs the scripts under the bash it is handed, so `OKGIT_BASH=/bin/bash` proves the installer still works on
+the version macOS ships. CI runs it from the tree on Ubuntu (pip) and macOS (uv); pushing a `v*` tag runs
+`.github/workflows/release.yml`, which builds the console, asserts the wheel **and** the sdist carry it,
+publishes the release with `SHA256SUMS` and the two scripts, and then installs that release from the
+internet with the same harness.
 
 Console development against a running daemon:
 
@@ -1040,7 +1067,8 @@ Console development against a running daemon:
 OKG_DAEMON=http://127.0.0.1:8737 npm run dev --prefix web   # Vite on :5173, proxying /api, /admin/api, /mcp, /metrics
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for style, the review gate, and how to add a screen.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for style, the review gate, the rules the installer follows, and how
+to add a screen.
 
 ## Repository layout
 
