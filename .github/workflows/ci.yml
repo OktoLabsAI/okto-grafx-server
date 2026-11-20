@@ -94,6 +94,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: uv is on the path we test it on
+        # macOS runners do not necessarily ship uv, and this matrix entry exists to test the uv path.
+        # Installing into the setup-python interpreter puts it on PATH where python3 already is.
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            uv --version
+          else
+            python3 -m pip install --quiet uv
+            uv --version
+          fi
       - name: install, init, start, attach a store, query it, uninstall
         env:
           OKGIT_SOURCE: --from-tree ${{ github.workspace }}

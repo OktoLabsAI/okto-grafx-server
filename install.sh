@@ -150,7 +150,7 @@ elif [ "$INSTALLER_WANTED" = "uv" ] || command -v uv >/dev/null 2>&1; then
     fail "--installer uv, but uv is not on PATH"
   fi
   USING_UV=1
-  say "installer   uv — it supplies a Python ≥ 3.11 of its own"
+  say "installer   uv $(uv --version 2>/dev/null | awk '{print $2}') — it supplies a Python ≥ 3.11 of its own"
 fi
 
 if [ "$USING_UV" = "0" ]; then

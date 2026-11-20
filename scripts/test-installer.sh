@@ -53,9 +53,16 @@ LOG="$SANDBOX/log"
 COOKIES="$SANDBOX/cookies.txt"
 CHECKS=0
 
+FAILED=0
 cleanup() {
   if [ -f "$OKGIT_STATE/daemon.pid" ]; then
     kill -TERM "$(tr -d '[:space:]' <"$OKGIT_STATE/daemon.pid")" 2>/dev/null || true
+  fi
+  # The sandbox goes away; a failure's log does not, or the only copy of what the installer said is gone
+  # with it and CI shows a step that exited 1 without a reason.
+  if [ "${FAILED:-0}" = "1" ] && [ -f "$LOG" ]; then
+    cp "$LOG" "${TMPDIR:-/tmp}/oktografx-installer-failure.log" 2>/dev/null || true
+    printf 'the installer output that failed is also at %s\n' "${TMPDIR:-/tmp}/oktografx-installer-failure.log" >&2
   fi
   [ "${OKGIT_KEEP:-0}" = "1" ] || rm -rf "$SANDBOX"
 }
@@ -67,6 +74,7 @@ ok() {
   printf '  ok  %s\n' "$1"
 }
 die() {
+  FAILED=1
   printf '\n\033[31mFAIL:\033[0m %s\n' "$1" >&2
   if [ -f "$LOG" ]; then
     printf -- '--- last lines of the installer output ---\n' >&2
@@ -107,7 +115,9 @@ fi
 "$OKGIT_PYTHON" --version || true
 
 step "--dry-run describes the run and touches nothing"
-run_install --dry-run
+if ! run_install --dry-run; then
+  die "install.sh --dry-run exited non-zero"
+fi
 expect_log '\[dry-run\]'
 if [ -e "$OKGIT_PREFIX" ] || [ -e "$OKGIT_STATE" ] || [ -e "$OKGIT_ROOT" ]; then
   die "--dry-run created a directory it promised not to create"

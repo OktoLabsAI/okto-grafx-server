@@ -171,6 +171,16 @@ jobs:
           diff "$RUNNER_TEMP/install.sh" install.sh
           diff "$RUNNER_TEMP/uninstall.sh" uninstall.sh
 
+      - name: uv is on the path we test it on
+        # macOS runners do not necessarily ship uv, and this matrix entry exists to test the uv path.
+        # Installing into the setup-python interpreter puts it on PATH where python3 already is.
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            uv --version
+          else
+            python3 -m pip install --quiet uv
+            uv --version
+          fi
       - name: Install, init, start, attach a store, query it, uninstall
         env:
           OKGIT_INSTALL: ${{ runner.temp }}/install.sh
