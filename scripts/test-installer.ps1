@@ -739,3 +739,9 @@ db.close()
 $label = if ($SourceArgs.Count -gt 0) { $SourceArgs -join ' ' } else { 'published release' }
 Write-Host ''
 Write-Host "$Checks installer checks passed (source: $label, installer: $Installer)"
+
+# End the way a script should: by saying so. A pwsh -File that falls off the end reports the exit code of
+# the last external command it ran, and the last thing this harness does on purpose is ask curl to fail
+# against a port it deliberately left closed. All 25 checks passed and the job still came back red.
+# (The POSIX driver gets away with the same shape only because printf is its last command.)
+exit 0
