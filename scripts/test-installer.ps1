@@ -68,6 +68,10 @@ $env:OKTO_GRAFX_SERVER_STATE = $State
 
 $BaseUrl = "http://127.0.0.1:$Port"
 $Log = Join-Path $Sandbox 'log'
+$ErrLog = Join-Path $Sandbox 'log.stderr'
+# Long enough for a cold pip install of the tree on a runner, short enough that a wedged installer is a
+# failed check rather than a job that timed out with nothing printed.
+$TimeoutMs = 420000
 $Cookies = Join-Path $Sandbox 'cookies.txt'
 $Checks = 0
 $Failed = $false
@@ -79,9 +83,11 @@ function Die {
     $script:Failed = $true
     Write-Host ''
     Write-Host "FAIL: $Message"
-    if (Test-Path -LiteralPath $Log) {
-        Write-Host '--- last lines of the installer output ---'
-        Get-Content -LiteralPath $Log -Tail 30 | ForEach-Object { Write-Host $_ }
+    foreach ($file in @($Log, $ErrLog)) {
+        if (Test-Path -LiteralPath $file) {
+            Write-Host "--- last lines of $file ---"
+            Get-Content -LiteralPath $file -Tail 30 | ForEach-Object { Write-Host "  $_" }
+        }
     }
     exit 1
 }
@@ -95,22 +101,36 @@ function Invoke-PsScript {
         [string[]] $Arguments
     )
     $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $File) + $Arguments
-    # cmd-level file redirection, which is what the POSIX driver does with >"$LOG" 2>&1, and for the same
-    # reason on Windows: piping through PowerShell gives the child a pipe whose write end the daemon it
-    # spawns inherits, so the pipeline waits for an EOF a running server will never send. With a file, the
-    # grandchild inherits a file and the caller gets its exit code.
-    $quoted = @()
-    foreach ($part in $all) {
-        if ("$part" -match '\s') { $quoted += '"' + $part + '"' } else { $quoted += [string] $part }
+    # File redirection rather than a pipeline, which is what the POSIX driver does with >"$LOG" 2>&1 and
+    # for the same reason on Windows: a pipeline hands the child a pipe whose write end any process it
+    # spawns inherits, so the reader waits for an EOF that a running daemon never sends. A file is
+    # inherited by the grandchild instead, and the caller still gets an exit code.
+    #
+    # The wait is bounded on purpose. The first hang cost the job's whole 25-minute timeout and the log
+    # said nothing, because a wedged installer never reaches the point where the harness prints its log;
+    # now it is a failed check that names the last step the installer started.
+    $proc = Start-Process -FilePath $Ps -ArgumentList $all -NoNewWindow -PassThru `
+        -RedirectStandardOutput $Log -RedirectStandardError $ErrLog
+    if (-not $proc.WaitForExit($TimeoutMs)) {
+        try { $proc.Kill($true) } catch { try { $proc.Kill() } catch { } }
+        Write-Host "--- still running after $([int] ($TimeoutMs / 1000))s; the installer's log so far ---"
+        foreach ($file in @($Log, $ErrLog)) {
+            if (Test-Path -LiteralPath $file) {
+                Write-Host "    [$file]"
+                Get-Content -LiteralPath $file -Tail 30 | ForEach-Object { Write-Host "      $_" }
+            }
+        }
+        Die 'the installer never finished: it is waiting on something it did not say it was waiting on'
     }
-    $call = '"' + $Ps + '" ' + ($quoted -join ' ') + ' > "' + $Log + '" 2>&1'
-    & $env:ComSpec /c $call
-    return ($LASTEXITCODE -eq 0)
+    return ($proc.ExitCode -eq 0)
 }
 
 function Expect-Literal {
     param([string] $Needle)
-    $text = if (Test-Path -LiteralPath $Log) { Get-Content -LiteralPath $Log -Raw } else { '' }
+    $text = ''
+    foreach ($file in @($Log, $ErrLog)) {
+        if (Test-Path -LiteralPath $file) { $text += (Get-Content -LiteralPath $file -Raw) }
+    }
     # String.Contains rather than -like: the needles include `[dry-run]`, and to -like that is a wildcard
     # character class - an invalid one, so the check dies with "The specified wildcard character pattern
     # is not valid" while the installer it is checking did exactly the right thing.
