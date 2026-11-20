@@ -2,7 +2,7 @@
 #
 # Okto Grafx Server — installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.1/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.sh | bash
 #
 # What it does, in this order:
 #
@@ -30,7 +30,7 @@
 #
 set -euo pipefail
 
-VERSION="0.1.1"
+VERSION="0.2.0"
 REPO="OktoLabsAI/okto-grafx-server"
 BINARY="oktografx-server"
 PACKAGE="okto_grafx_server"

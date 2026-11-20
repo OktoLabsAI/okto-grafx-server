@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "okto-grafx-server"
-version = "0.1.1"
+version = "0.2.0"
 description = "Server daemon and web administration console for the Okto Grafx embedded graph database"
 readme = "README.md"
 requires-python = ">=3.11"
