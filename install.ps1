@@ -272,18 +272,29 @@ if ($UsingUv) {
         $candidates = @('py', 'python3.13', 'python3.12', 'python3.11', 'python3', 'python')
     }
     $versionCheck = 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'
+    $tried = @()
     foreach ($candidate in $candidates) {
-        $resolved = if ($Python) { $Python } else { Get-Exe $candidate }
-        if (-not $resolved) { continue }
-        if ($resolved -match 'WindowsApps') { continue }
+        # Resolve through PATH first even when -Python named the interpreter itself: "-Python python" is
+        # what a person types, and on Windows that name may be the Store execution alias rather than an
+        # interpreter. A path that is not on PATH still works, because Get-Command takes a full path and
+        # Test-Path catches the ones it does not.
+        $resolved = Get-Exe $candidate
+        if (-not $resolved -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { $resolved = $candidate }
+        if (-not $resolved) { $tried += "$candidate (not found)"; continue }
+        if ($resolved -match 'WindowsApps') {
+            $tried += "$candidate (the Microsoft Store alias at $resolved, not an interpreter)"
+            continue
+        }
         # The launcher needs `-3` before `-c` or it may pick a 2.x; every other interpreter takes the
         # arguments directly, and that prefix has to travel with the path all the way to venv creation.
         $prefix = @()
         if ((Split-Path -Leaf $resolved) -ieq 'py.exe') { $prefix = @('-3') }
         $probe = Invoke-Native $resolved ($prefix + @('-c', $versionCheck))
         if ($probe.Code -eq 0) { $PythonBin = $resolved; $PythonArgs = $prefix; break }
+        $tried += "$resolved (exited $($probe.Code): $((($probe.Lines | Select-Object -First 2)) -join ' '))"
     }
     if (-not $PythonBin) {
+        foreach ($attempt in $tried) { Say "tried         $attempt" }
         Stop-WithError 'no Python >= 3.11 found. Install one (https://www.python.org/downloads/windows/), or install uv (https://docs.astral.sh/uv/) and run this again.'
     }
     $pyVersion = (Invoke-Native $PythonBin ($PythonArgs + @('--version'))).Lines -join ' '
@@ -401,10 +412,20 @@ try {
 
     # Which of the two spellings of the command actually exists, and whether it runs.
     $Bin = $null
+    $DaemonBin = $null
     if (-not $DryRun) {
         if (Test-Path -LiteralPath $BinExe -PathType Leaf) { $Bin = $BinExe }
         elseif (Test-Path -LiteralPath $BinCmd -PathType Leaf) { $Bin = $BinCmd }
         else { Stop-WithError "installed, but neither $BinExe nor $BinCmd exists" }
+        # What `Start-Process` gets: the venv path puts a two-line .cmd shim in bin because a symlink
+        # needs developer mode, and Start-Process cannot redirect the output of a batch file without
+        # ShellExecute - and with ShellExecute the pid it hands back is the shell's, not the daemon's.
+        # The venv's own console-script executable is a real process with a real pid, so the pid file
+        # names the thing that is actually serving the port.
+        $DaemonBin = $Bin
+        if (($Bin -ieq $BinCmd) -and (Test-Path -LiteralPath (Join-Path $DataDir 'venv\Scripts\oktografx-server.exe') -PathType Leaf)) {
+            $DaemonBin = Join-Path $DataDir 'venv\Scripts\oktografx-server.exe'
+        }
         $reported = Invoke-Native $Bin @('--version')
         if ($reported.Code -ne 0) { Stop-WithError "installed, but `"$Bin --version`" exited $($reported.Code): $($reported.Lines -join ' ')" }
         Say "command       $($reported.Lines | Select-Object -First 1)"
@@ -517,7 +538,7 @@ try {
             $runArgs = "--state-dir `"$StateDir`" run --port $Port"
             $stdout = Join-Path $StateDir 'server.stdout'
             $stderr = Join-Path $StateDir 'server.stderr'
-            $started = Start-Process -FilePath $Bin -ArgumentList $runArgs -WindowStyle Hidden `
+            $started = Start-Process -FilePath $DaemonBin -ArgumentList $runArgs -WindowStyle Hidden `
                 -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
             Set-Content -LiteralPath (Join-Path $StateDir 'daemon.pid') -Value $started.Id -Encoding ascii
             for ($attempt = 0; $attempt -lt 60; $attempt++) {
