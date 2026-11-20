@@ -575,16 +575,21 @@ try {
             Say "[dry-run] start /min `"$Bin`" --state-dir `"$StateDir`" run --port $Port"
         } else {
             Log 'Starting the daemon'
-            # Start-Process detaches: the daemon outlives this shell the way `nohup ... &` does, and it is
-            # hidden because a console window on somebody's desktop is not a service. There is no
-            # supervisor behind it - nothing relaunches it after a crash, nothing brings it back after a
-            # reboot - and the summary says so rather than implying otherwise.
+            # Start-Process detaches: the daemon outlives this shell the way `nohup ... &` does. There
+            # is no supervisor behind it - nothing relaunches it after a crash, nothing brings it back
+            # after a reboot - and the summary says so rather than implying otherwise.
+            # -NoNewWindow rather than -WindowStyle Hidden: 5.1 cannot honour Hidden and the redirections
+            # together, and asking for Hidden left the daemon holding the installer's console - including
+            # the write end of the caller's stdout pipe. The installer exited, the server kept serving,
+            # and whoever was reading that pipe waited for an EOF a live daemon never sends: the job hung
+            # until the runner killed an orphan oktografx-server 25 minutes later. Requesting the
+            # redirections forces a windowless start by itself, so nothing flashes on a desktop either.
             # Start-Process joins an -ArgumentList array with spaces and does not quote for you, so the
             # arguments are quoted here: %USERPROFILE% is routinely `C:\Users\First Last`.
             $runArgs = "--state-dir `"$StateDir`" run --port $Port"
             $stdout = Join-Path $StateDir 'server.stdout'
             $stderr = Join-Path $StateDir 'server.stderr'
-            $started = Start-Process -FilePath $DaemonBin -ArgumentList $runArgs -WindowStyle Hidden `
+            $started = Start-Process -FilePath $DaemonBin -ArgumentList $runArgs -NoNewWindow `
                 -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
             Set-Content -LiteralPath (Join-Path $StateDir 'daemon.pid') -Value $started.Id -Encoding ascii
             for ($attempt = 0; $attempt -lt 60; $attempt++) {

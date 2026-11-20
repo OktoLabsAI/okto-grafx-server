@@ -95,7 +95,16 @@ function Invoke-PsScript {
         [string[]] $Arguments
     )
     $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $File) + $Arguments
-    & $Ps @all 2>&1 | Out-File -FilePath $Log -Encoding ascii
+    # cmd-level file redirection, which is what the POSIX driver does with >"$LOG" 2>&1, and for the same
+    # reason on Windows: piping through PowerShell gives the child a pipe whose write end the daemon it
+    # spawns inherits, so the pipeline waits for an EOF a running server will never send. With a file, the
+    # grandchild inherits a file and the caller gets its exit code.
+    $quoted = @()
+    foreach ($part in $all) {
+        if ("$part" -match '\s') { $quoted += '"' + $part + '"' } else { $quoted += [string] $part }
+    }
+    $call = '"' + $Ps + '" ' + ($quoted -join ' ') + ' > "' + $Log + '" 2>&1'
+    & $env:ComSpec /c $call
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -117,7 +126,8 @@ function Invoke-Curl {
         [string] $OutFile = $null
     )
     if (-not $OutFile) { $OutFile = Join-Path $Sandbox ('body.' + [Guid]::NewGuid().ToString('N').Substring(0, 6)) }
-    $written = & curl.exe -sS -o $OutFile -w '%{http_code}' @CurlArgs
+    # --max-time so a server that stopped answering is a failed check rather than a hung job.
+    $written = & curl.exe -sS --max-time 20 -o $OutFile -w '%{http_code}' @CurlArgs
     $codeText = ($written | Out-String).Trim()
     $code = 0
     if ($codeText -match '\d{3}') { $code = [int] ($matches[0]) }
