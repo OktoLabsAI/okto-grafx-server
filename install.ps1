@@ -1,11 +1,11 @@
 <#
 Okto Grafx Server - installer (Windows).
 
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.ps1').Content))"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.ps1').Content))"
 
 Or save it and run the file, which is the version you can read before you run:
 
-  curl.exe -fsSL -o install.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.ps1
+  curl.exe -fsSL -o install.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.ps1
   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Port 8899
 
 What it does, in this order - the same order and the same promises as install.sh, in the Windows
@@ -45,7 +45,7 @@ three characters of mojibake - and no grep in the test harness would ever notice
 param(
     # Version to install. The default is the one this script was published with, so a pinned URL stays
     # a pinned version even after the tag moves.
-    [string] $Version = '0.2.0',
+    [string] $Version = '0.2.1',
     # Where the oktografx-server command goes.
     [string] $Prefix,
     # Where server.toml / server.db live. Empty means: ask the same way the server does, which reads
