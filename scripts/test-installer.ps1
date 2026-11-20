@@ -200,10 +200,22 @@ function Set-OwnerOnlyAcl {
     # because a promise tested through a different mechanism is not the promise being tested.
     param([string] $Path)
     $sid = Get-OwnerSid
-    $acl = [System.Security.AccessControl.FileSecurity]::new(
-        "D:P(A;;FA;;;$($sid.Value))",
-        [System.Security.AccessControl.AccessControlSections]::Access)
-    [System.IO.File]::SetAccessControl($Path, $acl)
+    # The calls install.ps1 makes, in the same order, for the same reason: the FileSecurity constructor
+    # that looks like it parses SDDL is the one that takes a file name, and .NET resolved
+    # "D:P(A;;FA;;;S-1-5-21-...)" as a path relative to the current directory on drive D: before telling
+    # us it could not find that file.
+    $security = [System.IO.File]::GetAccessControl($Path)
+    $security.SetAccessRuleProtection($true, $false)
+    foreach ($explicit in @($security.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+        if ($explicit.IdentityReference.Value -ne $sid.Value) { $security.PurgeAccessRules($explicit.IdentityReference) }
+    }
+    $security.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+        $sid,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        [System.Security.AccessControl.InheritanceFlags]::None,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow))
+    [System.IO.File]::SetAccessControl($Path, $security)
 }
 
 function Assert-OwnerOnlyAcl {

@@ -579,20 +579,37 @@ try {
                         Set-Content -LiteralPath $TokenPath -Value $Token -Encoding ascii
                         # The POSIX installer creates this file under umask 177. NTFS has no umask, so the
                         # equivalent of "owner only" is an access list holding exactly one entry - this
-                        # account, nothing inherited from the folder above. It is written as SDDL,
-                        # D:P(A;;FA;;;<sid>), because that notation means the same thing in every
-                        # PowerShell. Assembling the list rule by rule read better, worked in the shell it
-                        # was written against, and left the file inheriting its folder in the one that
-                        # actually runs this script: the in-box Windows PowerShell 5.1. So the entries are
-                        # stated and then read back, and when they cannot be had the reason is said out
-                        # loud - a security promise that fails quietly is worse than no promise.
+                        # account, nothing inherited from the folder above - and the entries are read back
+                        # afterwards, because a security promise that fails quietly is worse than no
+                        # promise. If it cannot be had, the warning says what stopped it.
                         $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
                         $why = ''
                         try {
-                            $acl = [System.Security.AccessControl.FileSecurity]::new(
-                                "D:P(A;;FA;;;$($sid.Value))",
-                                [System.Security.AccessControl.AccessControlSections]::Access)
-                            [System.IO.File]::SetAccessControl($TokenPath, $acl)
+                            # Read the file's own descriptor rather than build one from SDDL: of the two
+                            # FileSecurity constructors that take (string, AccessControlSections), the one
+                            # this picked is the one that takes a file name, and .NET ran Path.GetFullPath
+                            # over the SDDL before reporting that no such file existed - "D:P(A;;FA;;;S-1-
+                            # 5-21-...)" being, to that API, a path relative to the current directory on
+                            # drive D:. Same recipe, unambiguous calls, and the claim is checked after.
+                            $security = [System.IO.File]::GetAccessControl($TokenPath)
+                            # Protected, and not preserving what came from the parent: a token file must
+                            # not become readable next month because somebody relaxed its folder.
+                            $security.SetAccessRuleProtection($true, $false)
+                            # Whatever the profile folder granted - Users, Authenticated Users, an
+                            # Administrators group this account happens to be in - comes off, because the
+                            # claim being made is "this account alone".
+                            foreach ($explicit in @($security.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+                                if ($explicit.IdentityReference.Value -ne $sid.Value) {
+                                    $security.PurgeAccessRules($explicit.IdentityReference)
+                                }
+                            }
+                            $security.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+                                $sid,
+                                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                                [System.Security.AccessControl.InheritanceFlags]::None,
+                                [System.Security.AccessControl.PropagationFlags]::None,
+                                [System.Security.AccessControl.AccessControlType]::Allow))
+                            [System.IO.File]::SetAccessControl($TokenPath, $security)
                             $written = [System.IO.File]::GetAccessControl($TokenPath)
                             if (-not $written.AreAccessRulesProtected) {
                                 $why = 'the file still inherits its folder'
