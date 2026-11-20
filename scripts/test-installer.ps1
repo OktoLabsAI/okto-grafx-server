@@ -454,6 +454,21 @@ try {
     }
     Ok 'nothing was written'
 
+    # The same dry run with no source arguments at all, which is the shape an operator types first, and the
+    # only way the release branch - the URLs, the temp names, the checksum promise - is executed on Windows
+    # anywhere except release.yml. The ci.yml job installs from the tree, and -DryRun on the release branch
+    # had never run: $Work was null under -DryRun, so the first Join-Path refused to bind, and that was
+    # discovered in the verify job of a release that had already been published.
+    $planOnly = @('-Prefix', $Prefix, '-StateDir', $State, '-Root', $Root, '-Port', $Port, '-DryRun')
+    if (-not (Invoke-PsScript -File $Install -Arguments $planOnly)) {
+        Die 'install.ps1 -DryRun with no -FromTree exited non-zero'
+    }
+    Expect-Literal '[dry-run] download'
+    Expect-Literal 'SHA256SUMS'
+    Expect-Literal 'nothing is executed or created'
+    if (Test-Path -LiteralPath $Prefix) { Die '-DryRun created the prefix directory' }
+    Ok 'the release install is described without downloading anything'
+
     Step 'Install, init, start'
     if (-not (Invoke-Installer)) { Die 'install.ps1 exited non-zero' }
     Expect-Literal 'access        no token required'
