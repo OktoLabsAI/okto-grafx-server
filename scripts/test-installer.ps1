@@ -171,24 +171,30 @@ try {
     # one-liner pipes a scriptblock into a shell that never told anybody what went wrong.
     try { [ScriptBlock]::Create((Get-Content -LiteralPath $Install -Raw)) | Out-Null } catch { Die "install.ps1 does not parse: $_" }
     try { [ScriptBlock]::Create((Get-Content -LiteralPath $Uninstall -Raw)) | Out-Null } catch { Die "uninstall.ps1 does not parse: $_" }
-    # The encoding and line-ending claims in .gitattributes are behaviour, not taste: 5.1 reads a
-    # BOM-less script as the machine's ANSI codepage, cmd.exe parses `goto` in an LF-only batch file
-    # differently by build, bash refuses a CRLF script, and release.yml compares the tag's bytes against
-    # the tree's. Assert it here, where a violation is a named file rather than a bug report.
+    # The encoding and line-ending claims in .gitattributes are behaviour, not taste. ASCII is a rule for
+    # the Windows files only, and the reason is the reader rather than the content: Windows PowerShell 5.1
+    # decodes a BOM-less script as the machine's ANSI codepage, so an em dash reaches the operator as three
+    # characters of mojibake, while bash reads UTF-8 happily and install.sh keeps its punctuation. Line
+    # endings apply to all six: cmd.exe parses `goto` in an LF-only batch file differently by build, bash
+    # refuses a CRLF script, and release.yml compares the tag's bytes against the tree's.
     $shipped = @(
-        [pscustomobject]@{ File = 'install.ps1'; Want = 'crlf' },
-        [pscustomobject]@{ File = 'uninstall.ps1'; Want = 'crlf' },
-        [pscustomobject]@{ File = 'install.cmd'; Want = 'crlf' },
-        [pscustomobject]@{ File = 'uninstall.cmd'; Want = 'crlf' },
-        [pscustomobject]@{ File = 'install.sh'; Want = 'lf' },
-        [pscustomobject]@{ File = 'uninstall.sh'; Want = 'lf' }
+        [pscustomobject]@{ File = 'install.ps1'; Want = 'crlf'; Ascii = $true },
+        [pscustomobject]@{ File = 'uninstall.ps1'; Want = 'crlf'; Ascii = $true },
+        [pscustomobject]@{ File = 'install.cmd'; Want = 'crlf'; Ascii = $true },
+        [pscustomobject]@{ File = 'uninstall.cmd'; Want = 'crlf'; Ascii = $true },
+        [pscustomobject]@{ File = 'install.sh'; Want = 'lf'; Ascii = $false },
+        [pscustomobject]@{ File = 'uninstall.sh'; Want = 'lf'; Ascii = $false }
     )
     foreach ($entry in $shipped) {
         $bytes = [System.IO.File]::ReadAllBytes((Join-Path $RepoRoot $entry.File))
         $text = [System.Text.Encoding]::UTF8.GetString($bytes)
-        if ($text -match '[^\x00-\x7F]') {
+        if ($entry.Ascii -and ($text -match '[^\x00-\x7F]')) {
             Die "$($entry.File) carries non-ASCII bytes: 5.1 would show them as mojibake, so write ASCII"
         }
+        # Decoded as UTF-8 above, so a Windows file holding a real em dash reaches the regex rather than
+        # arriving already mangled, and a file that is not valid UTF-8 at all fails here instead of in
+        # front of an operator.
+        if ($entry.Ascii -and ($text -match '\uFFFD')) { Die "$($entry.File) is not valid UTF-8" }
         $crlf = ([regex]::Matches($text, "\r\n")).Count
         $bareLf = ([regex]::Matches($text, "(?<!\r)\n")).Count
         if ($entry.Want -eq 'crlf' -and (($crlf -eq 0) -or ($bareLf -gt 0))) {
