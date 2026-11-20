@@ -279,6 +279,9 @@ if (-not $StateDir) {
 $DataDir = Get-EnvDefault 'OKG_DATA_DIR' $Prefix
 $BinExe = Join-Path $Prefix 'bin\oktografx-server.exe'
 $BinCmd = Join-Path $Prefix 'bin\oktografx-server.cmd'
+# One name for the pid file, because three separate places need it: the check below that refuses to
+# reinstall over a live server, the write that records the daemon, and the summary line that tells the
+# operator how to stop it. Building the path inline each time is how one of them ends up different.
 $BaseUrl = Get-EnvDefault 'OKG_BASE_URL' "https://github.com/$Repo/releases/download/v$Version"
 
 Log 'Okto Grafx Server'
@@ -421,8 +424,8 @@ try {
     # fix. So the script notices first, before it touches anything, and names the command that clears it.
     # A pid file whose process is gone (crash, reboot, recycled pid) is not a running server: only a live
     # process that is actually ours stops the install.
-    if (-not $DryRun -and (Test-Path -LiteralPath $daemonPid)) {
-        $recorded = (Get-Content -LiteralPath $daemonPid -Raw).Trim()
+    if (-not $DryRun -and (Test-Path -LiteralPath $PidPath)) {
+        $recorded = (Get-Content -LiteralPath $PidPath -Raw).Trim()
         $serving = $null
         try { $serving = Get-Process -Id ([int] $recorded) -ErrorAction Stop } catch { $serving = $null }
         if ($serving -and $serving.ProcessName -like 'oktografx-server*') {
@@ -607,7 +610,7 @@ try {
             $stderr = Join-Path $StateDir 'server.stderr'
             $started = Start-Process -FilePath $DaemonBin -ArgumentList $runArgs -NoNewWindow `
                 -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-            Set-Content -LiteralPath (Join-Path $StateDir 'daemon.pid') -Value $started.Id -Encoding ascii
+            Set-Content -LiteralPath $PidPath -Value $started.Id -Encoding ascii
             for ($attempt = 0; $attempt -lt 60; $attempt++) {
                 if (Test-Health $HealthUrl) { $DaemonRunning = $true; break }
                 Start-Sleep -Milliseconds 500
@@ -662,7 +665,7 @@ try {
     }
     Say 'attach        oktografx-server db add C:\path\to\store.grafx --slug mystore --read-only'
     Say 'stores        oktografx-server status'
-    Say "stop          Stop-Process -Id (Get-Content $(Join-Path $StateDir 'daemon.pid'))"
+    Say "stop          Stop-Process -Id (Get-Content $PidPath)"
     Say "logs          $(Join-Path $StateDir 'server.log'), plus server.stdout and server.stderr"
     Say "uninstall     curl.exe -fsSL -o uninstall.ps1 https://raw.githubusercontent.com/$Repo/v$Version/uninstall.ps1"
     Say '              powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1'
