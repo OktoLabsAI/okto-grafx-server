@@ -1,7 +1,7 @@
 <#
 Okto Grafx Server - uninstaller (Windows).
 
-  curl.exe -fsSL -o uninstall.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/uninstall.ps1
+  curl.exe -fsSL -o uninstall.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/uninstall.ps1
   powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 
 Removes what install.ps1 put there: the `oktografx-server` command and the environment it lives in.

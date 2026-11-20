@@ -27,7 +27,7 @@
 one:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.sh | bash
 ```
 
 It puts `oktografx-server` in `~/.local/bin`, creates a state directory, and starts the daemon on
@@ -126,7 +126,7 @@ statistics, on a stated snapshot — including when that answer is a refusal.
 ### With one command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.sh | bash
 ```
 
 It puts `oktografx-server` in `~/.local/bin` — with `uv tool install` when `uv` is present, otherwise in a
@@ -137,7 +137,7 @@ machine**. Open <http://127.0.0.1:8737/> — no token to copy, no sign-in step, 
 A token is opt-in, because a credential you did not choose is a credential you will lose:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.sh \
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.sh \
   | bash -s -- --with-admin-token
 ```
 
@@ -149,7 +149,7 @@ Flags go after `bash -s --`. `--dry-run` prints every command and changes nothin
 thing to ask of anything you pipe into a shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.sh \
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.sh \
   | bash -s -- --port 8899 --root ~/graphs --dry-run
 ```
 
@@ -185,7 +185,7 @@ Two behaviours are deliberate:
   your threat model, download both files, check them yourself, and run the script from disk:
 
 ```bash
-curl -fsSLO https://github.com/OktoLabsAI/okto-grafx-server/releases/download/v0.2.0/SHA256SUMS
+curl -fsSLO https://github.com/OktoLabsAI/okto-grafx-server/releases/download/v0.2.1/SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS        # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
 bash install.sh --root ~/graphs
 ```
@@ -199,7 +199,7 @@ background process, not a supervised service — for launchd or systemd, see
 To take it back out:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/uninstall.sh | bash
 ```
 
 That removes the command and the environment it lives in and stops the daemon belonging to that state
@@ -215,7 +215,7 @@ the source below are the two ways in.
 The same installer, in the PowerShell spelling:
 
 ```powershell
-curl.exe -fsSL -o install.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.ps1
+curl.exe -fsSL -o install.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
@@ -225,7 +225,7 @@ arguments over. Two entry points, one implementation, because two installers dri
 for the drift with a flag that means something slightly different on the other side:
 
 ```bat
-curl.exe -fsSL -o install.cmd https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.cmd
+curl.exe -fsSL -o install.cmd https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.cmd
 install.cmd -Port 8899
 ```
 
@@ -250,7 +250,7 @@ as a hidden detached process and its pid goes to `daemon.pid`.
 To take it back out:
 
 ```powershell
-curl.exe -fsSL -o uninstall.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/uninstall.ps1
+curl.exe -fsSL -o uninstall.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/uninstall.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
 
@@ -323,7 +323,7 @@ Skip it and every JSON, WebSocket and MCP surface still works; only the browser 
 ### Verify the install
 
 ```bash
-.venv/bin/oktografx-server --version          # oktografx-server 0.2.0
+.venv/bin/oktografx-server --version          # oktografx-server 0.2.1
 .venv/bin/oktografx-server init --help
 ```
 
@@ -531,7 +531,7 @@ no session.
 
 ```bash
 curl -sS "$BASE/api/v1/health"
-# {"status":"ok","server":"0.2.0","grafx":"0.0.8","databases_registered":1,"databases_open":1,
+# {"status":"ok","server":"0.2.1","grafx":"0.0.8","databases_registered":1,"databases_open":1,
 #  "uptime_seconds":12.4,"runner":{"submitted":3,"completed":3,"failed":0,"cancelled_waiters":0,"in_flight":0}}
 
 curl -sS -H "Authorization: Bearer $KEY" "$BASE/api/v1/databases"

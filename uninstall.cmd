@@ -3,14 +3,14 @@ setlocal EnableExtensions
 
 rem Okto Grafx Server - uninstaller front-end for cmd.exe.
 rem
-rem   curl.exe -fsSL -o uninstall.cmd https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/uninstall.cmd
+rem   curl.exe -fsSL -o uninstall.cmd https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/uninstall.cmd
 rem   uninstall.cmd
 rem
 rem A front-end, not a second implementation: the behaviour is uninstall.ps1 and this finds
 rem powershell.exe and hands the arguments over. Switches belong to that file: -Prefix, -StateDir,
 rem -PurgeState, -RemoveFromPath, -DryRun, -Help.
 
-set "VERSION=0.2.0"
+set "VERSION=0.2.1"
 set "REPO=OktoLabsAI/okto-grafx-server"
 set "PS1=%~dp0uninstall.ps1"
 

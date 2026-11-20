@@ -2,7 +2,7 @@
 #
 # Okto Grafx Server — uninstaller.
 #
-#   curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/uninstall.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/uninstall.sh | bash
 #
 # Removes what install.sh put there: the `oktografx-server` command and the environment it lives in.
 #

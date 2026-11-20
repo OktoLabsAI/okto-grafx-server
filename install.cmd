@@ -3,7 +3,7 @@ setlocal EnableExtensions
 
 rem Okto Grafx Server - installer front-end for cmd.exe.
 rem
-rem   curl.exe -fsSL -o install.cmd https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.cmd
+rem   curl.exe -fsSL -o install.cmd https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.1/install.cmd
 rem   install.cmd -Port 8899
 rem
 rem This is not a second installer. The behaviour lives in install.ps1 and this file only finds
@@ -15,7 +15,7 @@ rem
 rem Switches are the PowerShell ones: -Prefix, -StateDir, -Root, -Port, -WithAdminToken, -DryRun, ...
 rem Run "install.cmd -Help" for the list.
 
-set "VERSION=0.2.0"
+set "VERSION=0.2.1"
 set "REPO=OktoLabsAI/okto-grafx-server"
 set "PS1=%~dp0install.ps1"
 

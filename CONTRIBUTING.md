@@ -134,8 +134,9 @@ treated as a product surface with its own harness rather than as a convenience s
 * `uv tool install` has no `--bin-dir`; point it at `--prefix` with `UV_TOOL_BIN_DIR`.
 * Publishing is pushing a tag: `git tag -a vX.Y.Z -m '…' && git push origin vX.Y.Z`. The release workflow
   builds the console, asserts the wheel carries `index.html` and a hashed asset, builds sdist + wheel,
-  writes `SHA256SUMS`, publishes a GitHub Release with both installer scripts, and then installs that
-  release on Ubuntu (pip) and macOS (uv) with the same harness.
+  writes `SHA256SUMS`, publishes a GitHub Release with all six installer scripts, and then installs that
+  release on Ubuntu (pip), macOS (uv) and Windows (pip, in-box PowerShell 5.1) with the same harness — the
+  only place the published assets, rather than the working tree, are what gets installed.
 
 The Windows installers (`install.ps1`, `uninstall.ps1`) hold the same contract in the other shell, and
 `install.cmd` / `uninstall.cmd` are front-ends onto the `.ps1` — they find `powershell.exe` and hand the
@@ -163,12 +164,45 @@ pays with a switch that means something slightly different on the other side.
   disagree about where your registrations are. Change one and you change the other, plus
   `tests/test_config_and_paths.py`, which asserts both platforms by patching `sys.platform` — patching
   `os.name` instead turns every `Path` in the process into a `WindowsPath`.
-* There is no umask on NTFS, so the token file's `0600` is an access list with inheritance dropped and one
-  grant (`icacls`); if the call fails, say the promise did not hold rather than printing that it did.
+* There is no umask on NTFS, so the token file's `0600` is an access list: inheritance dropped, every other
+  identity purged, one grant to this account's SID. Build it, then **read the entries back**. Judging the
+  file by `AreAccessRulesProtected` is a statement about inheritance, not about who can read a secret, and
+  the first version of this trusted the flag while the file went on inheriting its folder. When it cannot
+  be had, the warning carries the reason rather than the words "could not", because a security promise that
+  fails quietly is worse than no promise at all.
+* **The two runtimes are not the same API surface.** These scripts run on Windows PowerShell 5.1, whose
+  .NET Framework has `File.GetAccessControl`; the driver runs on pwsh 7, whose .NET does not, and reaches
+  the same DACL through `Get-Acl` / `Set-Acl`. `Get-FileHash` is the mirror image — present in pwsh 7,
+  absent from the runner's 5.1 — which is why the checksum is computed with the framework type. Same
+  promise, one door each, and the read-back is what makes that safe to claim.
+* **A name that resolves in the driver's session says nothing about the shell that will run the script**, so
+  the driver resolves every command name the parser finds in the shipped `.ps1` files against the in-box
+  5.1 (`Test-CommandNames -Child`) rather than against itself, and rejects any variable a script reads but
+  never assigns. Three invented names got past parsing and past review before that check existed; each one
+  only failed on the machine running the one-liner.
+* `FileSecurity(string, AccessControlSections)` looks like it parses SDDL and is the overload that takes a
+  *file name*: .NET ran `Path.GetFullPath` over `D:P(A;;FA;;;S-1-5-21-…)` — to that API `D:` is the current
+  directory on drive D: — and reported a missing file. Do not reach for it.
+* **A detached child inherits the caller's handles.** `Start-Process -WindowStyle Hidden` and
+  `-RedirectStandardOutput` cannot both be honoured on 5.1, and asking for the first left the daemon holding
+  the write end of the caller's stdout — which is not a broken server but a caller waiting for an EOF a live
+  server never sends, for as long as the job is willing to wait. Use `-NoNewWindow` with the redirections,
+  record the pid of what is really listening, and bound every installer call in the driver (`WaitForExit`)
+  so wedging is a named failure with a log rather than a job timeout.
+* **Windows cannot replace the executable a running process was started from.** Rerunning the installer is
+  the documented upgrade path and uneventful on Unix, where the running binary is unlinked and the daemon
+  carries on from its inode; here it is a `WinError 32` from the middle of `pip install`, with the
+  environment part old and part new, and nothing in the error mentioning the server that was still up.
+  `install.ps1` refuses before it writes anything and names `Stop-Process -Id` — and only for a live process
+  that is ours, because a pid left by a crash, a reboot or pid reuse must not stop an install.
+* **`pwsh -File` reports the exit code of the last external command** when the script never says how it
+  ended, and the last thing the driver does on purpose is ask curl about a port it deliberately left closed.
+  It ends with `exit 0`.
 * **These scripts are only ever executed on CI.** `scripts/test-installer.ps1` is the Windows twin of the
   POSIX driver and runs on `windows-latest` in `ci.yml` (from the tree) and in `release.yml` (from the
   published assets, with the in-box 5.1). Editing them without that job green is editing blind: there is
-  no way to run a `.ps1` or a `.cmd` on the macOS or Linux box you are holding.
+  no way to run a `.ps1` or a `.cmd` on the macOS or Linux box you are holding. Every hang and every
+  invented identifier in this file was paid for on a runner, because nothing else could see them.
 
 ## Committing
 
