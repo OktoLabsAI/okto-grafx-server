@@ -181,11 +181,14 @@ function Test-PythonAtLeast {
     $text = ($result.Lines -join ' ')
     $match = [regex]::Match($text, 'Python (\d+)\.(\d+)')
     if (-not $match.Success) {
-        return [pscustomobject]@{ Ok = $false, Version = ''; Detail = "no version in: $text" }
+        # A hashtable literal separates entries with semicolons. A comma parses as an array element and
+        # the error message points at the next token, which is a confusing way to learn it.
+        return [pscustomobject]@{ Ok = $false; Version = ''; Detail = "no version in: $text" }
     }
-    $seen = [pscustomobject]@{ Major = [int] $match.Groups[1].Value; Minor = [int] $match.Groups[2].Value }
-    $ok = ($seen.Major -gt $Major) -or (($seen.Major -eq $Major) -and ($seen.Minor -ge $Minor))
-    return [pscustomobject]@{ Ok = $ok; Version = "$($seen.Major).$($seen.Minor)"; Detail = "Python $seen" }
+    $found = "$($match.Groups[1].Value).$($match.Groups[2].Value)"
+    $ok = ([int] $match.Groups[1].Value -gt $Major) -or `
+        (([int] $match.Groups[1].Value -eq $Major) -and ([int] $match.Groups[2].Value -ge $Minor))
+    return [pscustomobject]@{ Ok = $ok; Version = $found; Detail = "Python $found" }
 }
 
 function Get-Exe {
