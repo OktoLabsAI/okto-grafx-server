@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -169,11 +170,56 @@ def test_load_config_reads_toml_and_overrides(tmp_path: Path) -> None:
     assert load_config(state / "server.toml", overrides={"state_dir": str(state)}).bind_port == 9100
 
 
+def test_the_starter_file_is_readable_toml_on_any_platform(tmp_path: Path) -> None:
+    # A Windows store root is `D:\\graphs`, and a single backslash is not legal inside a TOML basic
+    # string: the starter file interpolated roots between plain quotes, so `init` on Windows produced a
+    # server.toml that tomllib refused - a server that cannot read its own configuration, only on the
+    # platform that uses that separator. The three shapes below are what real paths do.
+    import tomllib
+
+    roots = [r"D:\graphs", r"C:\Users\O'Brien\graphs", 'C:\\Users\\"quoted\"']
+    path = tmp_path / "server.toml"
+    write_default_config(path, allowed_roots=roots, port=9123)
+
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert raw["allowed_roots"] == roots
+    assert raw["bind_port"] == 9123
+    assert raw["bind_host"] == "127.0.0.1"
+
+
 def test_environment_state_dir_is_resolved(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OKTO_GRAFX_SERVER_STATE", str(tmp_path / "from-env"))
     from okto_grafx_server.config import default_state_dir
 
     assert default_state_dir() == (tmp_path / "from-env").resolve()
+
+
+def test_the_state_dir_default_is_the_platform_habit(tmp_path: Path, monkeypatch) -> None:
+    # The installer asks this function where state lives rather than carrying a second answer, and the
+    # two platforms answer differently. Both are asserted here, on a machine that is neither, by
+    # replacing the two things the function is allowed to look at. `sys.platform` rather than `os.name`
+    # because Path() itself consults os.name on every construction: patching that turns every path in
+    # the process into a WindowsPath and the test dies inside pathlib instead of here.
+    for var in ("OKTO_GRAFX_SERVER_STATE", "XDG_STATE_HOME", "LOCALAPPDATA"):
+        monkeypatch.delenv(var, raising=False)
+
+    from okto_grafx_server.config import default_state_dir
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert default_state_dir() == home / ".local" / "state" / "okto-grafx-server"
+
+    local = tmp_path / "AppData" / "Local"
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    assert default_state_dir() == local / "okto-grafx-server"
+
+    # The escape hatch is not platform-specific: a container or a portable install pins the directory
+    # the same way wherever it runs, and it is honoured before LOCALAPPDATA is even read.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "pinned"))
+    assert default_state_dir() == tmp_path / "pinned" / "okto-grafx-server"
 
 
 # -- path policy -----------------------------------------------------------------------

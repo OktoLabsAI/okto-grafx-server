@@ -77,10 +77,11 @@ jobs:
     name: installer (${{ matrix.os }}, ${{ matrix.installer }})
     # install.sh is a product surface: it is the first thing most people run, it is usually piped
     # straight into a shell, and it has to work on the bash macOS ships, not only the one a developer
-    # installed. This job runs the same driver the release workflow runs, with the source pointed at the
-    # working tree instead of the published artifacts.
+    # installed. install.ps1 makes the same promises to the machines that have no bash at all, and this
+    # job is the only place any of that PowerShell is ever executed — a .ps1 cannot be run on the macOS
+    # or Linux box a developer is holding, so "it parses" is not something anyone can check by hand.
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -89,6 +90,8 @@ jobs:
             installer: pip
           - os: macos-latest
             installer: uv
+          - os: windows-latest
+            installer: pip
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -97,6 +100,7 @@ jobs:
       - name: uv is on the path we test it on
         # macOS runners do not necessarily ship uv, and this matrix entry exists to test the uv path.
         # Installing into the setup-python interpreter puts it on PATH where python3 already is.
+        if: runner.os != 'Windows'
         run: |
           if command -v uv >/dev/null 2>&1; then
             uv --version
@@ -105,12 +109,24 @@ jobs:
             uv --version
           fi
       - name: install, init, start, attach a store, query it, uninstall
+        if: runner.os != 'Windows'
         env:
           OKGIT_SOURCE: --from-tree ${{ github.workspace }}
           OKGIT_INSTALLER: ${{ matrix.installer }}
           OKGIT_PYTHON: python3
           OKGIT_PORT: "8791"
         run: ./scripts/test-installer.sh
+      - name: install, init, start, attach a store, query it, uninstall (PowerShell)
+        # Driven by the in-box Windows PowerShell, not by pwsh 7 from the runner image: the one-liner in
+        # the README runs on a machine where nothing has been installed yet, and that is 5.1.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          OKGIT_SOURCE: -FromTree ${{ github.workspace }}
+          OKGIT_INSTALLER: ${{ matrix.installer }}
+          OKGIT_PYTHON: python
+          OKGIT_PORT: "8791"
+        run: ./scripts/test-installer.ps1
 
   gate:
     name: acceptance gate (no browser)

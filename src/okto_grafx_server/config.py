@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import sys
 import tomllib
 from dataclasses import MISSING, dataclass, field, fields as dataclass_fields
 from pathlib import Path
@@ -55,12 +56,26 @@ class PathPolicyError(AppError):
 
 
 def default_state_dir() -> Path:
+    """Where ``server.toml`` and ``server.db`` go when the operator did not say.
+
+    ``OKTO_GRAFX_SERVER_STATE`` wins on every platform, and ``XDG_STATE_HOME`` is honoured on every
+    platform too — including Windows — so a test, a container or a portable install can pin the
+    directory without knowing which OS it is running on. What is left is the platform's own habit: a
+    dot-directory under the home on POSIX, and the per-user application data directory on Windows,
+    because someone looking for this folder in Explorer opens ``%LOCALAPPDATA%`` and reads the product
+    name, rather than walking into a ``.local`` they never created. The installer reads this function's
+    answer rather than carrying a second copy of it, so there is one rule for where state lives.
+    """
     override = os.environ.get("OKTO_GRAFX_SERVER_STATE")
     if override:
         return Path(override).expanduser().resolve()
     base = os.environ.get("XDG_STATE_HOME")
     if base:
         return Path(base).expanduser() / "okto-grafx-server"
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data).expanduser() / "okto-grafx-server"
     return Path.home() / ".local" / "state" / "okto-grafx-server"
 
 
@@ -242,16 +257,50 @@ def validate_config(config: ServerConfig) -> ServerConfig:
     return config
 
 
+def toml_string(value: str) -> str:
+    """``value`` as a TOML basic string, with the escapes the format demands.
+
+    Hand-writing this file is what keeps the server dependency-free, and a Windows path is where that
+    stops being easy. The starter file used to interpolate roots between plain quotes, so a root of
+    ``D:\\graphs`` came out as ``allowed_roots = ["D:\\graphs"]`` with one backslash, and ``tomllib``
+    refuses that -- so the server wrote a configuration it could not read back on the platform whose
+    separator it was. A TOML literal string would fix paths and then break the path with an apostrophe
+    in it, so the escaping here is the general one.
+    """
+    out = ['"']
+    for char in value:
+        if char == "\\":
+            out.append("\\\\")
+        elif char == '"':
+            out.append('\\"')
+        elif char == "\b":
+            out.append("\\b")
+        elif char == "\t":
+            out.append("\\t")
+        elif char == "\n":
+            out.append("\\n")
+        elif char == "\f":
+            out.append("\\f")
+        elif char == "\r":
+            out.append("\\r")
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            out.append(f"\\u{ord(char):04X}")
+        else:
+            out.append(char)
+    out.append('"')
+    return "".join(out)
+
+
 def write_default_config(path: Path, *, allowed_roots: list[str], port: int = DEFAULT_BIND_PORT) -> Path:
     """Create a starter ``server.toml``; never overwrite an existing one."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return path
-    roots = "\n".join(f'    "{r}",' for r in allowed_roots) or '    "~/graphs",'
+    roots = '\n'.join(f'    {toml_string(r)},' for r in allowed_roots) or '    "~/graphs",'
     path.write_text(
         "# okto-grafx-server configuration\n"
-        f'bind_host = "{DEFAULT_BIND_HOST}"\n'
+        f'bind_host = {toml_string(DEFAULT_BIND_HOST)}\n'
         f"bind_port = {port}\n"
         "\n"
         "# The server only opens stores inside these directories.\n"

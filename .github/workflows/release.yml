@@ -85,7 +85,10 @@ jobs:
           cat SHA256SUMS
 
       - name: Ship the installer beside the artifacts
-        run: cp install.sh uninstall.sh dist/
+        # Six files on purpose: install.cmd and uninstall.cmd are front-ends that find powershell.exe and
+        # hand the arguments to the .ps1, so a cmd user needs one download and there is still exactly one
+        # implementation of the install.
+        run: cp install.sh uninstall.sh install.ps1 uninstall.ps1 install.cmd uninstall.cmd dist/
 
       - name: Release notes
         run: |
@@ -108,7 +111,25 @@ jobs:
           arriving from elsewhere. \`bash -s -- --with-admin-token\` opts into one — printed once, kept as a
           hash, demanded on every administrator request — and Settings carries the same switch, with the
           CLI equivalents spelled out. Flags go through \`bash -s --\`, and \`--dry-run\` shows every command
-          it would run.
+          it would run. State lives in \`~/.local/state/okto-grafx-server\`.
+
+          **Windows**
+
+          \`\`\`powershell
+          curl.exe -fsSL -o install.ps1 https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/install.ps1
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+          \`\`\`
+
+          The same promises in the PowerShell spelling — the wheel is checked against this release's
+          \`SHA256SUMS\`, a state directory is created only when there is none, the daemon starts hidden on
+          127.0.0.1:8737, and by default there is no administrator token. State lives in
+          \`%LOCALAPPDATA%\okto-grafx-server\`, and \`-WithAdminToken\` opts into a credential exactly as
+          above. Switches are PowerShell-style (\`-Prefix\`, \`-StateDir\`, \`-Root\`, \`-Port\`, \`-DryRun\`,
+          \`-Help\`); \`install.cmd\` is a front-end onto the same script for a cmd prompt, not a second
+          installer.
+
+          The daemon is a hidden process, not a service: it does not relaunch after a crash and it does not
+          come back after a reboot. Stop it with \`Stop-Process -Id (Get-Content <state>\daemon.pid)\`.
 
           **Verify what you downloaded**
 
@@ -128,9 +149,12 @@ jobs:
           - \`${sdist}\` — the source distribution
           - \`SHA256SUMS\` — checksums for both
           - \`install.sh\` / \`uninstall.sh\` — the scripts above, so a pinned URL always resolves
+          - \`install.ps1\` / \`uninstall.ps1\` — the same installer for Windows
+          - \`install.cmd\` / \`uninstall.cmd\` — front-ends onto those, for a cmd prompt
 
           Uninstall: \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/uninstall.sh | bash\`.
-          It removes the command and its environment and leaves the state directory and every store alone.
+          On Windows, \`curl.exe -fsSL -o uninstall.ps1 …uninstall.ps1\` and run it. Both remove the command
+          and its environment and leave the state directory and every store alone.
           EOF
 
       - name: Create the release
@@ -139,7 +163,9 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
-            dist/*.whl dist/*.tar.gz dist/SHA256SUMS dist/install.sh dist/uninstall.sh \
+            dist/*.whl dist/*.tar.gz dist/SHA256SUMS \
+            dist/install.sh dist/uninstall.sh \
+            dist/install.ps1 dist/uninstall.ps1 dist/install.cmd dist/uninstall.cmd \
             --title "Okto Grafx Server ${GITHUB_REF_NAME}" \
             --notes-file dist/NOTES.md \
             --verify-tag
@@ -158,6 +184,8 @@ jobs:
             installer: pip
           - os: macos-latest
             installer: uv
+          - os: windows-latest
+            installer: pip
     steps:
       # The installer under test is the one the tag publishes; the harness driving it is the one in the
       # tree. With OKGIT_SOURCE empty, install.sh downloads the release wheel and checks its SHA-256, so
@@ -168,6 +196,7 @@ jobs:
           python-version: "3.12"
 
       - name: Fetch the scripts the tag publishes
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}"
@@ -178,9 +207,26 @@ jobs:
           diff "$RUNNER_TEMP/install.sh" install.sh
           diff "$RUNNER_TEMP/uninstall.sh" uninstall.sh
 
+      - name: Fetch the scripts the tag publishes (Windows)
+        # Byte-for-byte, including the CRLF the batch file needs: .gitattributes marks these files -text
+        # so what raw.githubusercontent serves is what the repository holds, and a hash comparison is
+        # then a real claim rather than an accident of the checkout.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $raw = "https://raw.githubusercontent.com/${env:GITHUB_REPOSITORY}/${env:GITHUB_REF_NAME}"
+          foreach ($name in @('install.ps1', 'uninstall.ps1', 'install.cmd', 'uninstall.cmd')) {
+            curl.exe -fsSL "$raw/$name" -o "$env:RUNNER_TEMP\$name"
+            if ((Get-FileHash "$env:RUNNER_TEMP\$name").Hash -ne (Get-FileHash "./$name").Hash) {
+              Write-Host "::error::$name on the tag is not the byte-for-byte file this tree carries"
+              exit 1
+            }
+          }
+
       - name: uv is on the path we test it on
         # macOS runners do not necessarily ship uv, and this matrix entry exists to test the uv path.
         # Installing into the setup-python interpreter puts it on PATH where python3 already is.
+        if: runner.os != 'Windows'
         run: |
           if command -v uv >/dev/null 2>&1; then
             uv --version
@@ -189,6 +235,7 @@ jobs:
             uv --version
           fi
       - name: Install, init, start, attach a store, query it, uninstall
+        if: runner.os != 'Windows'
         env:
           OKGIT_INSTALL: ${{ runner.temp }}/install.sh
           OKGIT_UNINSTALL: ${{ runner.temp }}/uninstall.sh
@@ -197,3 +244,17 @@ jobs:
           OKGIT_PYTHON: python3
           OKGIT_PORT: "8799"
         run: ./scripts/test-installer.sh
+
+      - name: Install, init, start, attach a store, query it, uninstall (PowerShell)
+        # Driven by the in-box Windows PowerShell, because that is the interpreter the operator has before
+        # they have installed anything.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          OKGIT_INSTALL: ${{ runner.temp }}/install.ps1
+          OKGIT_UNINSTALL: ${{ runner.temp }}/uninstall.ps1
+          OKGIT_SOURCE: ""
+          OKGIT_INSTALLER: ${{ matrix.installer }}
+          OKGIT_PYTHON: python
+          OKGIT_PORT: "8799"
+        run: ./scripts/test-installer.ps1
