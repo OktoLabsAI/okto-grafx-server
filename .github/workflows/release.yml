@@ -103,8 +103,10 @@ jobs:
           \`\`\`
 
           It installs \`oktografx-server\` into \`~/.local\`, creates a state directory (never over an
-          existing one), starts the daemon on 127.0.0.1:8737 and prints the administrator token once.
-          Flags go through \`bash -s --\`, and \`--dry-run\` shows every command it would run.
+          existing one), starts the daemon on 127.0.0.1:8737, and ends with a summary that lists the
+          administrator token — the one it just minted, or the one already in \`<state>/admin-token\` (mode
+          600) — and the command that mints a new one if that file is gone, since the server keeps only a
+          hash. Flags go through \`bash -s --\`, and \`--dry-run\` shows every command it would run.
 
           **Verify what you downloaded**
 
