@@ -572,6 +572,16 @@ db.close()
     if (($status.Lines -join ' ') -notmatch 'demo ') { Die "status did not list the store: $($status.Lines -join ' ')" }
     Ok 'db add accepted a store under the installer root'
 
+    # The data plane needs a listening server, and the running-server refusal above meant stopping it.
+    # Bringing it back through the installer rather than a Start-Process here is deliberate: rerunning the
+    # installer is what an operator does after they have stopped the server, and the other half of
+    # "idempotent" is that the run which reinstalls nothing still leaves a serving daemon behind.
+    if (-not (Invoke-Installer @())) { Die 'install.ps1 could not start the server again after it had been stopped' }
+    if ((Invoke-Curl @("$BaseUrl/api/v1/health")).Code -ne 200) { Die "the rerun reported Ready and nothing is answering on $Port" }
+    $restarted = (Get-Content -LiteralPath (Join-Path $State 'daemon.pid') -Raw).Trim()
+    if (-not (Get-Process -Id ([int] $restarted) -ErrorAction SilentlyContinue)) { Die "daemon.pid names $restarted, which is not a process" }
+    Ok 'a rerun with nothing new to install brings the server back up'
+
     # Same reason: the JSON body goes over as a file, so no double quote has to survive a shell boundary
     # to reach the server under test.
     $keyRequest = Join-Path $Sandbox 'key-request.json'
