@@ -687,10 +687,17 @@ db.close()
     # step that installs the release instead of the tree would spend its whole life failing for a bug this
     # branch already fixed. Downloading and verifying a published asset is release.yml's job, where the
     # assets under test are the ones built from the tag.
-    $withToken = Invoke-PsScript -File $Install -Arguments @(
-        '-Prefix', $TokenPrefix, '-StateDir', $TokenState, '-Root', $Root, '-Port', $Port,
-        '-Installer', $Installer, '-Python', $Python, '-WithAdminToken', '-NoRun') + $SourceArgs
+    $mintArgs = @('-Prefix', $TokenPrefix, '-StateDir', $TokenState, '-Root', $Root, '-Port', $Port,
+                  '-Installer', $Installer, '-Python', $Python, '-WithAdminToken', '-NoRun') + $SourceArgs
+    $withToken = Invoke-PsScript -File $Install -Arguments $mintArgs
     if (-not $withToken) { Die 'install.ps1 -WithAdminToken exited non-zero' }
+    if ($SourceArgs.Count -gt 0) {
+        # Not paranoia: written as `-Arguments @(...) + $SourceArgs`, the source arguments never arrived
+        # and the step installed the published wheel instead - which fails for a reason this branch has
+        # already fixed, and looks like a credential bug. So say which thing the run had to install.
+        # 'Installing ' covers the venv and the uv paths; Downloading means the tree was ignored.
+        Expect-Literal 'Installing '
+    }
     Expect-Literal 'token         okga_'
     $Minted = ([regex]::Match((Get-Content -LiteralPath $Log -Raw), 'okga_[A-Za-z0-9_-]{16,}')).Value
     if (-not $Minted) { Die '-WithAdminToken printed no token' }
