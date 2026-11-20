@@ -257,16 +257,50 @@ def validate_config(config: ServerConfig) -> ServerConfig:
     return config
 
 
+def toml_string(value: str) -> str:
+    """``value`` as a TOML basic string, with the escapes the format demands.
+
+    Hand-writing this file is what keeps the server dependency-free, and a Windows path is where that
+    stops being easy. The starter file used to interpolate roots between plain quotes, so a root of
+    ``D:\\graphs`` came out as ``allowed_roots = ["D:\\graphs"]`` with one backslash, and ``tomllib``
+    refuses that -- so the server wrote a configuration it could not read back on the platform whose
+    separator it was. A TOML literal string would fix paths and then break the path with an apostrophe
+    in it, so the escaping here is the general one.
+    """
+    out = ['"']
+    for char in value:
+        if char == "\\":
+            out.append("\\\\")
+        elif char == '"':
+            out.append('\\"')
+        elif char == "\b":
+            out.append("\\b")
+        elif char == "\t":
+            out.append("\\t")
+        elif char == "\n":
+            out.append("\\n")
+        elif char == "\f":
+            out.append("\\f")
+        elif char == "\r":
+            out.append("\\r")
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            out.append(f"\\u{ord(char):04X}")
+        else:
+            out.append(char)
+    out.append('"')
+    return "".join(out)
+
+
 def write_default_config(path: Path, *, allowed_roots: list[str], port: int = DEFAULT_BIND_PORT) -> Path:
     """Create a starter ``server.toml``; never overwrite an existing one."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return path
-    roots = "\n".join(f'    "{r}",' for r in allowed_roots) or '    "~/graphs",'
+    roots = '\n'.join(f'    {toml_string(r)},' for r in allowed_roots) or '    "~/graphs",'
     path.write_text(
         "# okto-grafx-server configuration\n"
-        f'bind_host = "{DEFAULT_BIND_HOST}"\n'
+        f'bind_host = {toml_string(DEFAULT_BIND_HOST)}\n'
         f"bind_port = {port}\n"
         "\n"
         "# The server only opens stores inside these directories.\n"
