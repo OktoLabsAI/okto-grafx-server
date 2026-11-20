@@ -137,7 +137,7 @@ function Test-CommandNames {
     # or one of the programs these scripts exist to run. The parser hands over the first list for free,
     # so there is no excuse for not asking: this harness once invoked a helper called Note that nothing
     # had defined, and the failure only appeared at the moment an operator would have hit it.
-    param([string] $Name, [string] $Text)
+    param([string] $Name, [string] $Text, [switch] $Child)
     $own = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($found in [regex]::Matches($Text, '(?m)^\s*function\s+([A-Za-z_][A-Za-z0-9_\-]*)')) {
         [void] $own.Add($found.Groups[1].Value)
@@ -146,7 +146,7 @@ function Test-CommandNames {
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref] $tokens, [ref] $parseErrors)
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $unknown = @()
+    $reached = @()
     foreach ($command in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
         $invoked = $command.GetCommandName()
         # Nothing static to check when the command itself is a variable, and a name that starts with one
@@ -155,11 +155,37 @@ function Test-CommandNames {
         if (-not $seen.Add($invoked)) { continue }
         if ($own.Contains($invoked)) { continue }
         if ($ShellCommands -contains $invoked) { continue }
-        if (Get-Command -Name $invoked -ErrorAction SilentlyContinue) { continue }
-        $unknown += $invoked
+        $reached += $invoked
     }
-    if ($unknown.Count -gt 0) {
-        Die "$Name invokes commands nothing defines: $($unknown -join ', ')"
+    if ($reached.Count -eq 0) { return }
+    if (-not $Child) {
+        # The harness runs in the runner's pwsh 7, so this session is the right one to ask about its own
+        # names: that is where a helper nobody wrote (the Note above) gets caught.
+        $absent = @($reached | Where-Object { -not (Get-Command -Name $_ -ErrorAction SilentlyContinue) })
+        if ($absent.Count -gt 0) { Die "$Name invokes commands nothing defines: $($absent -join ', ')" }
+        return
+    }
+    # The shipped scripts do not run here. They run in the in-box Windows PowerShell, and a name this
+    # session can resolve says nothing about that one - Get-FileHash is the proof: it exists in pwsh 7,
+    # the 5.1 that ran install.ps1 said it had never heard of it, and the run only noticed two thirds of
+    # the way through, when there was a downloaded wheel to verify and no way to hash it. So ask 5.1,
+    # through a file rather than an inline program, because quoting an inline program is its own hazard.
+    $nameFile = Join-Path $Sandbox 'commands.txt'
+    Set-Content -LiteralPath $nameFile -Value $reached -Encoding ascii
+    $probe = Join-Path $Sandbox 'command-probe.ps1'
+    if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) {
+        Set-Content -LiteralPath $probe -Encoding ascii -Value @(
+            'param([string] $NamesFile)',
+            'foreach ($name in (Get-Content -LiteralPath $NamesFile)) {',
+            '    if (-not (Get-Command -Name $name -ErrorAction SilentlyContinue)) { Write-Output $name }',
+            '}'
+        )
+    }
+    $probed = Get-Native $Ps @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $probe, '-NamesFile', $nameFile)
+    if ($probed.Code -ne 0) { Die "the command probe exited $($probed.Code): $($probed.Lines -join ' ')" }
+    $absent = @($probed.Lines | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
+    if ($absent.Count -gt 0) {
+        Die "$Name reaches for commands the in-box PowerShell does not have: $($absent -join ', ')"
     }
 }
 
@@ -393,7 +419,7 @@ try {
         if ($undefined.Count -gt 0) {
             Die "$($entry.File) reads a variable it never defines: $($undefined[0]) (and $($undefined.Count - 1) more)"
         }
-        Test-CommandNames -Name $entry.File -Text $text
+        Test-CommandNames -Name $entry.File -Text $text -Child
     }
     Test-CommandNames -Name 'scripts/test-installer.ps1' -Text (Get-Content -LiteralPath $PSCommandPath -Raw)
     Ok 'the six shipped files hold the encoding, line endings and variable names they promise'

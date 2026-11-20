@@ -246,6 +246,21 @@ function Invoke-Download {
     throw $lastError
 }
 
+function Get-Sha256 {
+    param([string] $Path)
+    # SHA-256 of a file as lower-case hex, straight from the framework. Get-FileHash would be one line and
+    # the in-box Windows PowerShell on the CI runner answered that it had never heard of it - which is the
+    # wrong place to be for this particular step: verifying a download is the one part of an installer
+    # whose whole job is to be trustworthy, so it should not depend on a module being autoloadable in
+    # whichever shell the operator happened to pipe this script into.
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try { $bytes = $sha.ComputeHash($stream) } finally { $stream.Dispose() }
+    } finally { $sha.Dispose() }
+    return ([System.BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
+}
+
 function Test-Health {
     param([string] $BaseUrl)
     try {
@@ -404,7 +419,7 @@ try {
         if (-not $expected) {
             Stop-WithError "the release's SHA256SUMS has no line for $WheelName - refusing to install it unverified"
         }
-        $actual = (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actual = Get-Sha256 -Path $Target
         if ($expected -ne $actual) {
             Write-Host ''
             Write-Host "error: SHA-256 mismatch for $WheelName"
