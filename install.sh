@@ -15,7 +15,8 @@
 #      new administrator token and invalidates the old one, and an installer that surprises you about
 #      that is worse than one that stops;
 #   5. starts the daemon on 127.0.0.1 and waits for /api/v1/health;
-#   6. prints the token once, and keeps a copy at <state>/admin-token with mode 0600.
+#   6. shows the administrator token in its summary — the one it minted, or the one already in
+#      <state>/admin-token (mode 0600) — plus the rotate command that mints a new one if it is lost.
 #
 # Nothing runs as root, nothing is written outside $HOME unless you pass --prefix, and --dry-run prints
 # every command without touching the filesystem. Flags through a pipe need `bash -s --`:
@@ -370,11 +371,29 @@ fi
 # --------------------------------------------------------------------------------- handover
 log "Ready"
 say "console     http://127.0.0.1:$PORT/"
+TOKEN_SHOWN=0
 if [ -n "$TOKEN" ]; then
   say "token       $TOKEN"
-  say "            the server prints it once; the copy is ${STATE_DIR}/admin-token"
+  say "            minted now, printed once by the server; the copy is ${STATE_DIR}/admin-token (600)"
+  TOKEN_SHOWN=1
 elif [ -f "$STATE_DIR/admin-token" ]; then
-  say "token       issued earlier: cat ${STATE_DIR}/admin-token"
+  # Showing it again is the point. An installer that says "it was printed once, sometime, in an earlier
+  # run" leaves the operator to guess where the value went, and the value is already in a file this user
+  # owns and can read.
+  say "token       $(tr -d '[:space:]' <"$STATE_DIR/admin-token")"
+  say "            minted by an earlier run; this is the copy in ${STATE_DIR}/admin-token (600)"
+  TOKEN_SHOWN=1
+else
+  # We cannot know why there is no file — this state may have been created with --no-token-file, or the
+  # file may simply be gone — so the message states the fact and the way out, and does not blame anyone.
+  say "token       no administrator token is available: ${STATE_DIR}/admin-token does not exist. The"
+  say "            server keeps only a hash, so nothing can be recovered from it — mint one:"
+  say "            $BINARY --state-dir $STATE_DIR admin-token rotate"
+fi
+say "login       open http://127.0.0.1:$PORT/ and paste it into the sign-in screen"
+if [ "$TOKEN_SHOWN" = "1" ]; then
+  say "lost it?    $BINARY --state-dir $STATE_DIR admin-token rotate"
+  say "            mints a new token and invalidates the old one, and every session signed in with it"
 fi
 say "attach      $BINARY db add /path/to/store.grafx --slug mystore --read-only"
 say "stores      $BINARY status"

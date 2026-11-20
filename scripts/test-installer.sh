@@ -129,6 +129,9 @@ if ! run_install; then
   die "install.sh exited non-zero"
 fi
 expect_log 'token       okga_'
+# "It was printed once, in an earlier run" is not a handover: the operator needs a value they can paste
+# now, and a way out if they misplace it.
+expect_log 'admin-token rotate'
 [ -x "$BIN" ] || die "$BIN is not executable"
 "$BIN" --version >"$SANDBOX/version.txt" 2>&1
 grep -Eq 'oktografx-server [0-9]+' "$SANDBOX/version.txt" || die "--version did not print a version"
@@ -171,7 +174,14 @@ expect_log 'State directory already exists'
 if [ "$TOKEN" != "$(cat "$OKGIT_STATE/admin-token")" ]; then
   die "the administrator token changed on a rerun — the old one would have stopped working"
 fi
-ok "same token, existing state untouched"
+# The value has to be *shown*, again, read back from the file: this is the run that happens after the
+# terminal scrollback is gone, and it is the one where people give up and re-init (which would silently
+# invalidate the token they are still using).
+if ! grep -q "token       $TOKEN" "$LOG"; then
+  die "the rerun's summary did not list the token the operator has to paste"
+fi
+expect_log 'admin-token rotate'
+ok "same token, existing state untouched, and the summary lists it plus how to mint another"
 
 step "Attach a store and read it back over the data plane"
 # The interpreter is whatever the installed command is running on — the venv's for a pip install, the
