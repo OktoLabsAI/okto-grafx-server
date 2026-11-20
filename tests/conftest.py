@@ -85,7 +85,14 @@ def seed_store(path: Path, *, text_index: bool = True, vector_space: bool = True
 class Harness:
     """A daemon under test, plus the ordinary operator motions."""
 
-    def __init__(self, root: Path, *, admin_token: str | None = None, **overrides: Any) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        admin_token: str | None = None,
+        require_token: bool = True,
+        **overrides: Any,
+    ) -> None:
         self.root = root
         self.state_dir = root / "state"
         self.graphs = root / "graphs"
@@ -107,12 +114,26 @@ class Harness:
         # the operator of a state directory that already exists.
         if self.context.store.admin_token_configured():
             self.admin_token = admin_token  # None until the caller supplies the known token
-        else:
+        elif require_token:
             self.admin_token = admin_token or generate_admin_token()
             self.context.store.set_admin_token(self.admin_token)
+        else:
+            # A state directory exactly as ``init`` leaves it by default: no credential at all, so
+            # the administrator surface is this-machine-only.
+            self.admin_token = None
         self.app = create_app(context=self.context)
         self.client = TestClient(self.app)
         self._entered = False
+
+    def as_loopback(self, *, peer: str = "127.0.0.1", port: int = 8737) -> TestClient:
+        """A client whose ASGI peer is a real loopback address.
+
+        ``TestClient`` reports its peer as ``testclient`` — an address no socket can present, so it
+        proves a token works but cannot prove that only loopback may walk in without one. Enter the
+        *harness* for the lifespan; leave this one un-entered so the context is not started twice.
+        """
+
+        return TestClient(self.app, client=(peer, 50000), base_url=f"http://127.0.0.1:{port}")
 
     # -- lifecycle ---------------------------------------------------------------------
 

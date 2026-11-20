@@ -99,6 +99,16 @@ describe("attaching a store by reference", () => {
     allowed_roots: ["/srv/grafx"],
     limits: { max_open_handles: 4, readers_per_database: 2, reader_lane_timeout_seconds: 5 },
     security: { tls: false, cors_origins: [], metrics_enabled: false, note: "loopback only" },
+    admin_auth: {
+      mode: "token",
+      token_configured: true,
+      token_rotated_at: null,
+      commands: {
+        require: "oktografx-server --state-dir /var/lib/okto-grafx-server admin-token rotate",
+        rotate: "oktografx-server --state-dir /var/lib/okto-grafx-server admin-token rotate",
+        stop_requiring: "oktografx-server --state-dir /var/lib/okto-grafx-server admin-token clear",
+      },
+    },
     database_options: [
       {
         name: "page_size",
@@ -391,6 +401,16 @@ describe("attaching a store by reference", () => {
           allowed_roots: ["/srv/grafx"],
           limits: { max_open_handles: 4, readers_per_database: 2, reader_lane_timeout_seconds: 5 },
           security: { tls: false, cors_origins: [], metrics_enabled: false, note: "loopback only" },
+          admin_auth: {
+            mode: "token",
+            token_configured: true,
+            token_rotated_at: null,
+            commands: {
+              require: "oktografx-server --state-dir /var/lib/okto-grafx-server admin-token rotate",
+              rotate: "oktografx-server --state-dir /var/lib/okto-grafx-server admin-token rotate",
+              stop_requiring: "oktografx-server --state-dir /var/lib/okto-grafx-server admin-token clear",
+            },
+          },
           database_options: [],
           maintenance_actions: [],
         },
@@ -403,3 +423,94 @@ describe("attaching a store by reference", () => {
     expect(screen.getByText("recovery required")).toBeInTheDocument();
     expect(screen.getByText(/budget times|budget ×/i)).toBeInTheDocument();
   });
+
+describe("administrator access with no token", () => {
+  const STATUS = { handles: [], open_slugs: [], runner: {}, ws_sessions: 0, uptime_seconds: 1 };
+
+  function settingsBody(mode: "token" | "open-loopback") {
+    const state = "/var/lib/okto-grafx-server";
+    return {
+      server_version: "0.1.1",
+      bind: { host: "127.0.0.1", port: 8737 },
+      state_dir: state,
+      allowed_roots: [],
+      limits: {},
+      security: { tls: false, cors_origins: [], metrics_enabled: false, note: "loopback only" },
+      admin_auth: {
+        mode,
+        token_configured: mode === "token",
+        token_rotated_at: mode === "token" ? "2026-11-20T09:00:00+00:00" : null,
+        commands: {
+          require: `oktografx-server --state-dir ${state} admin-token rotate`,
+          rotate: `oktografx-server --state-dir ${state} admin-token rotate`,
+          stop_requiring: `oktografx-server --state-dir ${state} admin-token clear`,
+        },
+      },
+      database_options: [],
+      maintenance_actions: [],
+    };
+  }
+
+  const OPEN_SESSION = { signed_in: true, token_configured: false, auth: "open-loopback" };
+
+  it("shows the posture on the rail and offers no sign-out of a door with no lock", async () => {
+    mockFetch({
+      "/admin/api/session": { status: 200, body: OPEN_SESSION },
+      "/admin/api/status": { status: 200, body: STATUS },
+      "/admin/api/databases": { status: 200, body: { databases: [] } },
+    });
+
+    renderAt("/databases");
+
+    expect(await screen.findByText("this machine only")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /sign out/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /token is off/i })).toBeInTheDocument();
+  });
+
+  it("offers to require a token while none exists, and shows the value once", async () => {
+    const { calls } = mockFetch({
+      "/admin/api/session": { status: 200, body: OPEN_SESSION },
+      "/admin/api/status": { status: 200, body: STATUS },
+      "/admin/api/settings": { status: 200, body: settingsBody("open-loopback") },
+      "/admin/api/admin-token": {
+        status: 200,
+        body: { admin_token: "okga_fresh", shown_once: true, signed_in: true, note: "keep it" },
+      },
+    });
+
+    renderAt("/settings");
+    // The panel states the default in the operator's terms and hands over the command line version.
+    expect(await screen.findByText("no token — this machine only")).toBeInTheDocument();
+    expect(
+      screen.getByText("oktografx-server --state-dir /var/lib/okto-grafx-server admin-token rotate"),
+    ).toBeInTheDocument();
+    // Turning it on is a deliberate act: arming shows what changes before anything is minted.
+    const button = await screen.findByRole("button", { name: /require a token/i });
+    expect(screen.queryByText(/Any process on this machine can create API keys/i)).toBeNull();
+    await userEvent.click(button);
+    expect(screen.getByText(/Any process on this machine can create API keys/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /require a token/i }));
+
+    expect(await screen.findByText("okga_fresh")).toBeInTheDocument();
+    expect(
+      calls.some((call) => call.url.endsWith("/admin/api/admin-token") && call.init?.method === "POST"),
+    ).toBe(true);
+  });
+
+  it("offers rotation and the way back out when a token is required", async () => {
+    mockFetch({
+      "/admin/api/session": { status: 200, body: { signed_in: true, token_configured: true, auth: "token" } },
+      "/admin/api/status": { status: 200, body: STATUS },
+      "/admin/api/settings": { status: 200, body: settingsBody("token") },
+    });
+
+    renderAt("/settings");
+
+    expect(await screen.findByText("token required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /rotate admin token/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stop requiring a token/i })).toBeInTheDocument();
+    expect(screen.getByText("2026-11-20T09:00:00+00:00")).toBeInTheDocument();
+    // Nothing to mint here: minting over a live token is what rotation exists to prevent.
+    expect(screen.queryByRole("button", { name: /require a token$/i })).not.toBeInTheDocument();
+  });
+});

@@ -39,6 +39,8 @@ export function Shell({ children }: { children: ReactNode }) {
     refetchInterval: 60_000,
   });
   const signedIn = session.data?.signed_in === true;
+  // The default posture: no credential exists, so there is nothing for this browser to sign out of.
+  const openAccess = session.data?.auth === "open-loopback";
   // The daemon answers `200 {"signed_in": false}` for an anonymous visitor — it keeps 401 for a
   // credential it actively refuses. Either way there is nothing to show but the login screen.
   const refused = session.error instanceof ApiError && session.error.status === 401;
@@ -103,7 +105,9 @@ export function Shell({ children }: { children: ReactNode }) {
         </nav>
         <div className="border-t border-line p-3 text-[11px] text-muted">
           <div className="mb-2 flex items-center gap-2">
-            <Badge tone={signedIn ? "ok" : "danger"}>{signedIn ? "admin session" : "signed out"}</Badge>
+            <Badge tone={openAccess ? "warn" : signedIn ? "ok" : "danger"}>
+              {openAccess ? "this machine only" : signedIn ? "admin session" : "signed out"}
+            </Badge>
           </div>
           {status.data ? (
             <dl className="space-y-0.5">
@@ -121,10 +125,19 @@ export function Shell({ children }: { children: ReactNode }) {
               </div>
             </dl>
           ) : null}
-          <button className="btn mt-3 w-full justify-center" onClick={() => logout.mutate()} type="button">
-            <LogOut size={14} strokeWidth={2} aria-hidden />
-            Sign out
-          </button>
+          {openAccess ? (
+            // Signing out of a door that has no lock would log the operator out of nothing, so the
+            // rail points at the switch instead.
+            <Link className="btn mt-3 w-full justify-center" to="/settings">
+              <ShieldCheck size={14} strokeWidth={2} aria-hidden />
+              token is off
+            </Link>
+          ) : (
+            <button className="btn mt-3 w-full justify-center" onClick={() => logout.mutate()} type="button">
+              <LogOut size={14} strokeWidth={2} aria-hidden />
+              Sign out
+            </button>
+          )}
         </div>
       </aside>
 

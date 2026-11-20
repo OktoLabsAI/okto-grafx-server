@@ -30,10 +30,11 @@ one:
 curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.1/install.sh | bash
 ```
 
-It puts `oktografx-server` in `~/.local/bin`, creates a state directory, starts the daemon on
-<http://127.0.0.1:8737/> and prints the administrator token once — open that address and paste it. No
-`pip install`, no Node, no service manager. Flags go after `bash -s --`; the checksum, the uninstaller and
-installing from source are in [Install](#install).
+It puts `oktografx-server` in `~/.local/bin`, creates a state directory, and starts the daemon on
+<http://127.0.0.1:8737/>, which answers as soon as it is up: no token, nothing to copy, because the
+administrator surface is open to this machine and closed to everywhere else. No `pip install`, no Node, no
+service manager. Flags go after `bash -s --`; the checksum, the uninstaller and installing from source are
+in [Install](#install).
 
 The store stays embedded and on local disk. This server holds it open on your behalf; it does not copy
 it, cache it, or move it. **A local process with filesystem access can open the same store directly and
@@ -127,9 +128,19 @@ curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.1
 
 It puts `oktografx-server` in `~/.local/bin` — with `uv tool install` when `uv` is present, otherwise in a
 venv under `~/.local/share` — creates the state directory, starts the daemon on `127.0.0.1:8737`, waits
-until `/api/v1/health` answers, and prints the administrator token once. The token is shown once by the
-server, so the installer also keeps a copy at `~/.local/state/okto-grafx-server/admin-token`, mode `0600`.
-Then open <http://127.0.0.1:8737/> and paste the token.
+until `/api/v1/health` answers, and then says what opened: **nothing is required to reach it from this
+machine**. Open <http://127.0.0.1:8737/> — no token to copy, no sign-in step, nothing to lose.
+
+A token is opt-in, because a credential you did not choose is a credential you will lose:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.1/install.sh \
+  | bash -s -- --with-admin-token
+```
+
+That mints one, prints it once, keeps a copy at `~/.local/state/okto-grafx-server/admin-token` (mode
+`0600`), and from then on every administrator request has to carry it — from the console, from the CLI, from
+anywhere. [Settings](#the-console) shows the same switch and the commands that go with it.
 
 Flags go after `bash -s --`. `--dry-run` prints every command and changes nothing, which is a reasonable
 thing to ask of anything you pipe into a shell:
@@ -148,7 +159,9 @@ curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.1
 | `--installer auto\|uv\|pip` | `auto` | which installer to use (`uv` is preferred when present) |
 | `--python PATH` | first 3.11+ on PATH | interpreter for the venv (uv supplies its own) |
 | `--wheel FILE`, `--from-tree DIR` | — | install a local artifact instead of the release |
-| `--no-init`, `--no-run`, `--no-token-file` | off | install the command only, do not start, keep the token out of the filesystem |
+| `--with-admin-token` | off | require an administrator token: mints one, prints it once, writes the `0600` copy |
+| `--no-init`, `--no-run` | off | install the command only, do not start the daemon |
+| `--no-token-file` | off | with `--with-admin-token`, print the token instead of also writing it to the state directory |
 
 The same choices are environment variables, which is how CI and an air-gapped machine drive it without
 flags: `OKG_PREFIX`, `OKG_GRAPH_ROOT`, `OKG_PORT`, `OKTO_GRAFX_SERVER_STATE`, `XDG_DATA_HOME` and
@@ -157,10 +170,11 @@ flags: `OKG_PREFIX`, `OKG_GRAPH_ROOT`, `OKG_PORT`, `OKTO_GRAFX_SERVER_STATE`, `X
 
 Two behaviours are deliberate:
 
-* **A rerun never re-initialises.** Running `init` again mints a new administrator token and invalidates
-  the old one, so the installer stops when `<state>/server.toml` exists and tells you to rotate on purpose
-  with `oktografx-server admin-token rotate` — the control plane stores hashes, so rotation is the only
-  recovery when a token is lost.
+* **A rerun never re-initialises.** Running `init` again would mint a new administrator token over the
+  one you are holding, so the installer stops when `<state>/server.toml` exists and points at
+  `oktografx-server admin-token rotate` for when that is what you meant. The control plane stores hashes,
+  so rotation is the only recovery from a lost token — and while no token has ever been configured, there
+  is nothing to lose.
 * **The checksum proves transport, not authenticity.** The wheel is fetched from the GitHub release for
   this version and its SHA-256 is compared against that release's `SHA256SUMS`. That catches a truncated
   or substituted download. It does not prove the release is genuine, since both files come from the same
@@ -173,9 +187,10 @@ sha256sum -c --ignore-missing SHA256SUMS        # macOS: shasum -a 256 -c --igno
 bash install.sh --root ~/graphs
 ```
 
-The daemon listens on loopback over plain HTTP: anything else on this machine can reach the port, and
-anything on this machine with filesystem access can open the same store directly. The daemon the installer
-starts is a `nohup` background process, not a supervised service — for launchd or systemd, see
+The daemon listens on loopback over plain HTTP: anything else on this machine can reach the port, and —
+while no token is configured — whatever reaches it is the administrator. Anything on this machine with
+filesystem access can open the same store directly either way. The daemon the installer starts is a `nohup`
+background process, not a supervised service — for launchd or systemd, see
 [Running as a service](#running-as-a-service).
 
 To take it back out:
@@ -246,14 +261,20 @@ configuration:   …/server.toml
 control database:…/server.db
 console:         http://127.0.0.1:8737/
 
-ADMIN TOKEN (shown once, store it now):
-  okga_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+administrator:   no token required — the console answers this machine only, and anything
+                 arriving from somewhere else is refused.
+                 require one later: oktografx-server --state-dir … admin-token rotate
 ```
 
-That token is the bootstrap administrator credential. It is stored as a hash; this is the only time it
-is printed. The value above is a placeholder — the daemon prints 32 url-safe characters of its own.
-Re-running `init` keeps `server.toml` and every registration but mints a **new** token and
-invalidates the old one — and says so on stderr.
+No credential is created, because none is required: there is nothing to print, nothing to lose, and no
+step between installing and looking at your stores. The boundary is the machine.
+
+Add `--with-admin-token` to `init` and it is a different server: a token is minted, printed once, kept
+only as a hash, and demanded on every administrator request. `admin-token status` says which of the two
+you are running, `rotate` replaces the value and signs out every browser holding the old one, `clear`
+removes the requirement again. Settings has the same three moves and shows the new value once.
+
+The value printed below is a placeholder — a real token is 32 url-safe characters after `okga_`.
 
 ### 2. Run the daemon
 
@@ -280,15 +301,25 @@ it is — format version, page size, file count — before anything is registere
 ```bash
 BASE=http://127.0.0.1:8737
 
-# An administrator session, for the control plane (a cookie jar is enough).
+# The control plane, from this machine. With no token configured — the default — a plain request
+# from loopback *is* the administrator, and there is nothing to exchange first.
+curl -sS "$BASE/admin/api/session"
+# {"signed_in":true,"token_configured":false,"auth":"open-loopback",…}
+
+# If you turned a token on, exchange it for a session cookie and pass that cookie below:
 curl -sS -c cookies.txt -X POST "$BASE/admin/api/login" \
   -H 'content-type: application/json' -d '{"token":"okga_…"}'
 # {"signed_in":true,"expires_in_seconds":43200}
 
 # A data-plane key, scoped to one store, read-only. The secret is returned once.
-KEY=$(curl -sS -b cookies.txt -X POST "$BASE/admin/api/keys" \
+KEY=$(curl -sS -X POST "$BASE/admin/api/keys" \
   -H 'content-type: application/json' \
   -d '{"name":"reporting","databases":["docs"],"allow_writes":false}' | jq -r .key)
+```
+
+Every control-plane call from this machine works like that last one — no cookie — for as long as no token
+is configured. Turn one on and each call needs `-b cookies.txt` from the login above; the examples below
+skip it.
 
 curl -sS -H "Authorization: Bearer $KEY" "$BASE/api/v1/databases/docs/schema"
 curl -sS -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
@@ -304,11 +335,11 @@ database whose WAL is already checkpoint-complete. The refusal says exactly that
 in the console or three calls:
 
 ```bash
-curl -sS -b cookies.txt -X PATCH "$BASE/admin/api/databases/docs" \
+curl -sS -X PATCH "$BASE/admin/api/databases/docs" \
   -H 'content-type: application/json' -d '{"read_only":false,"allow_writes":true}'
-curl -sS -b cookies.txt -X POST "$BASE/admin/api/databases/docs/actions/recover"    -H 'content-type: application/json' -d '{"arguments":{}}'
-curl -sS -b cookies.txt -X POST "$BASE/admin/api/databases/docs/actions/checkpoint" -H 'content-type: application/json' -d '{"arguments":{}}'
-curl -sS -b cookies.txt -X PATCH "$BASE/admin/api/databases/docs" \
+curl -sS -X POST "$BASE/admin/api/databases/docs/actions/recover"    -H 'content-type: application/json' -d '{"arguments":{}}'
+curl -sS -X POST "$BASE/admin/api/databases/docs/actions/checkpoint" -H 'content-type: application/json' -d '{"arguments":{}}'
+curl -sS -X PATCH "$BASE/admin/api/databases/docs" \
   -H 'content-type: application/json' -d '{"read_only":true,"allow_writes":false}'
 ```
 
@@ -316,8 +347,9 @@ After that, every read is served through a read-only handle, and writes stay ref
 
 ## Using the operator console
 
-`http://127.0.0.1:8737/` — sign in with the administrator token. The session is an **httpOnly,
-SameSite=Strict cookie** valid 12 h; the token is never stored in the page.
+`http://127.0.0.1:8737/` — opens on your stores. There is no sign-in screen while no token is required;
+if one is, the session is an **httpOnly, SameSite=Strict cookie** valid 12 h and the token is never kept
+in the page. Settings → *administrator* is where that switches either way.
 
 | Screen | What it is for |
 | --- | --- |
@@ -329,7 +361,7 @@ SameSite=Strict cookie** valid 12 h; the token is never stored in the page.
 | **API keys** | Mint scoped keys (the secret appears once), enable/disable, revoke, and "use here" to make the console query as that key — so what you see is what that credential can see. |
 | **Jobs** | Maintenance jobs, their state, progress and errors. |
 | **Audit** | Who did what: actor, action, store, status, duration, request id. Filterable by action. |
-| **Settings** | The effective configuration, the limits, the security posture (TLS, CORS, metrics, consent flags), and the maintenance catalog. |
+| **Settings** | The effective configuration, the limits, the security posture (TLS, CORS, metrics, consent flags), the administrator switch — require a token, rotate it, stop requiring one — with the command-line equivalents, and the maintenance catalog. |
 
 Three behaviours are deliberate:
 
@@ -378,20 +410,21 @@ Six surfaces, two doors, three kinds of credential. Pick the one that matches th
 | [REST data plane](#rest-data-plane) | HTTPS-less HTTP/1.1, JSON | `Authorization: Bearer okg_…` | applications reading, searching, capturing graphs |
 | [WebSocket session](#websocket-write-session) | `GET /api/v1/ws` upgrade, JSON frames | bearer in `?token=`, `bearer.<token>` subprotocol, or header | **writes**, long read transactions, streaming batches |
 | [MCP](#mcp-for-agents) | `POST /mcp`, JSON-RPC 2.0 | `Authorization: Bearer okg_…` | agents and tools that speak Model Context Protocol |
-| [Admin API](#admin-api) | HTTP, JSON | administrator token → `okg_session` cookie | registrations, keys, maintenance, DDL, audit, settings |
+| [Admin API](#admin-api) | HTTP, JSON | nothing from this machine by default; token → `okg_session` cookie once one is configured | registrations, keys, maintenance, DDL, audit, settings |
 | [Operator console](#using-the-operator-console) | browser on the admin API + data plane | same cookie, optional pasted key | humans |
 | [CLI](#cli) | local, direct on the state directory | filesystem access to the state dir | bootstrapping, cron, emergencies |
 
-**The two doors never cross.** A data-plane key on `/admin/api` is refused with
-`admin_session_required`; an admin session on `/api/v1` is refused with `missing_api_key`. Two
-exceptions, both unauthenticated by design and carrying no store facts: `GET /api/v1/health` and
+**The two doors are not interchangeable in one direction.** A data-plane key on `/admin/api` is refused
+with `admin_session_required`; the administrator — cookie, token header, or the loopback default — is
+accepted on both doors, which is how the console queries stores without you pasting a key into it.
+Two surfaces are unauthenticated by design and carry no store facts: `GET /api/v1/health` and
 `GET /metrics` (the latter disabled unless you enable it).
 
 | | Data plane `/api/v1` + `/mcp` + `/api/v1/ws` | Admin plane `/admin/api` |
 | --- | --- | --- |
-| Credential | `Authorization: Bearer okg_…` (API key) | token → `okg_session` cookie (httpOnly, SameSite=Strict, 12 h) |
-| Scope | the stores the key lists, read or read-write | everything except reading store rows |
-| Lifetime | until revoked or deleted | 12 h, or until `logout` / token rotation |
+| Credential | `Authorization: Bearer okg_…` (API key) | none, from this machine, until a token is configured; then token → `okg_session` cookie (httpOnly, SameSite=Strict, 12 h) |
+| Scope | the stores the key lists, read or read-write | everything, including store rows |
+| Lifetime | until revoked or deleted | sessions: 12 h, or until `logout` / token rotation. Open access ends when you require a token |
 | Stored as | hash only | hash only |
 
 Every response carries `X-Request-Id`; the same id appears in error envelopes and in `server.log`, so a
@@ -598,7 +631,9 @@ For a client that expects a server entry:
 
 ### Admin API
 
-Base: `/admin/api`, authenticated by the session cookie. Get one:
+Base: `/admin/api`, answered through the session cookie. By default nothing has to be exchanged — a
+request that arrives from this machine *is* the administrator, and everything else is refused. Once a
+token is configured, get a cookie:
 
 ```bash
 curl -sS -c cookies.txt -X POST "$BASE/admin/api/login" -H 'content-type: application/json' \
@@ -607,9 +642,11 @@ curl -sS -c cookies.txt -X POST "$BASE/admin/api/login" -H 'content-type: applic
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/login` · `/logout` | token → cookie; rotation invalidates every session |
-| GET | `/session` | `signed_in`, `token_configured`, `server_version` |
-| POST | `/admin-token/rotate` | mints a new token; the old one and all sessions die |
+| POST | `/login` · `/logout` | token → cookie; only meaningful while a token is configured |
+| GET | `/session` | `signed_in`, `token_configured`, `auth` (`token` or `open-loopback`), `server_version` |
+| POST | `/admin-token` | require a token: mints one, shown once, and signs *this* browser in with it. `409` when one already exists — that is what rotate is for |
+| POST | `/admin-token/rotate` | mints a new token; the old one and every session built on it die |
+| DELETE | `/admin-token` | stop requiring one: back to this-machine-only, sessions and keys untouched |
 | GET | `/settings` | effective config, limits, security posture, maintenance catalog, and the **`DatabaseConfig` option table** the attach form is built from |
 | GET | `/status` | open handles, per-store buffer budget, quarantine flags, runner counters, ws sessions, uptime |
 | GET | `/roots` | the candidate store directories the daemon found under `allowed_roots` |
@@ -642,14 +679,16 @@ oktografx-server [--state-dir DIR] [--log-level LEVEL] [--version] <verb>
 
 | Command | What it does |
 | --- | --- |
-| `init [--root DIR] [--port N]` | Create the state directory, write `server.toml`, mint the admin token. Re-running keeps `server.toml` and the registrations but mints a **new** token and invalidates the old one — it says so on stderr. |
+| `init [--root DIR] [--port N] [--with-admin-token]` | Create the state directory and write `server.toml`. Mints no credential unless `--with-admin-token` says to; re-running keeps `server.toml` and every registration and says so rather than starting over. |
 | `run [--host H] [--port N] [--i-understand-remote-binding] [--i-understand-remote-store-metrics]` | Run the daemon in the foreground. |
 | `status` / `config` | Registered stores; the effective configuration as JSON. |
 | `db add PATH --slug S [--name N] [--read-only\|--writable] [--allow-writes] [--open-policy lazy\|pinned] [--option K=V] [--i-understand-remote-store-metrics]` | Attach an existing store **by reference**. |
 | `db list` / `db remove SLUG` | List; forget a registration (files are untouched). |
 | `key create NAME [--db S] [--db S2] [--allow-writes]` | Mint a data-plane key. |
 | `key list` / `key revoke KEY_ID` | List (never secrets); revoke. |
-| `admin-token rotate` | Mint a new administrator token and invalidate the old one. |
+| `admin-token rotate` | Require a token: mint one (shown once) and invalidate the old one and every session built on it. |
+| `admin-token status` | Say whether a token is required here, and when the current one was rotated. |
+| `admin-token clear` | Stop requiring one; the console goes back to answering this machine only. |
 
 `--state-dir` selects a different state directory (default `~/.local/state/okto-grafx-server`). The CLI
 touches the SQLite control plane directly, so it works even when the daemon is down — and it must not be
@@ -861,11 +900,26 @@ database because its own budget is large would be a worse failure than the memor
 ## Security notes
 
 * **Loopback only.** The server binds `127.0.0.1` and has no TLS. Binding elsewhere needs
-  `--i-understand-remote-binding` and demands a reverse proxy in front.
+  `--i-understand-remote-binding` and demands a reverse proxy in front — and a server bound off-loopback
+  refuses every administrator request until a token exists, so the open door described below is never
+  open to anything but this machine.
+* **Administrator access is open by default, and closed to everyone but this machine.** No token means no
+  credential, which is the honest default for a single-user server on a loopback socket. Three things
+  have to hold before a request counts as the operator: the peer address is loopback, the `Host` header
+  names loopback, and a request that *changes* something carries same-site evidence — `Sec-Fetch-Site`, or
+  an `Origin`/`Referer` pointing at this machine. A WebSocket handshake counts as a change, because that
+  is what it opens. The `Host` rule is what defeats DNS rebinding; the same-site rule is what stops a page
+  you visited from POSTing into your local server, since a browser cannot read the answer to a cross-origin
+  POST but can certainly send one. A client with no browser fingerprint — curl, the CLI, an MCP client —
+  is already on the machine, which is the boundary being drawn. Turning a token on (Settings →
+  administrator, or `admin-token rotate`) puts a credential in front of all of it again, and a configured
+  token is always demanded. There is deliberately no `server.toml` switch for this: the requirement
+  follows whether a token exists, so the console, the CLI and a config file cannot disagree.
 * **Credentials are hashes.** The admin token and API keys are stored as hashes; a database dump does not
   hand over usable secrets. Rotation and revocation are immediate.
 * **The admin session is an httpOnly, SameSite=Strict cookie** — the token is never kept in the page, and
-  cross-site requests cannot carry it.
+  cross-site requests cannot carry it. While a token is configured, that cookie or the token header is the
+  only way in.
 * **The audit trail is metadata only.** Statements are truncated to 400 characters and parameters are
   recorded as shapes (`str<12>`, `int`, `list<4>`), never values. It covers REST, the console, MCP and
   every write-session frame (`ws.begin`, `ws.execute`, `ws.commit`, `ws.rollback`, `ws.close_tx`).
@@ -888,7 +942,9 @@ database because its own budget is large would be a worse failure than the memor
 * **Logs carry no secrets.** Credentials are rewritten to `[redacted]`, the query string is never logged,
   and the rotating file lives in the state directory you own (`server.log`, 5 MiB × 5).
 * **This is not a sandbox.** A local process with filesystem access can open the store directly, with or
-  without this server running.
+  without this server running. And while no token is configured, any local process that can reach the port
+  *is* the administrator here: it can mint keys and register stores. That is why the token is one command
+  away rather than a decision you have to remember after the fact.
 
 ## Logs
 
@@ -982,11 +1038,18 @@ session cookie is one too.
 
 ## Operator recipes
 
-**Lost the admin token.** There is nothing to recover — only a hash is stored. Rotate:
+**Lock the console, or unlock it.** With no token configured this machine *is* the administrator and there
+is no credential to lose. The moment you want one — a shared machine, a habit of running downloads — mint
+it; reversing that is one command too, and Settings has the same three switches.
 
 ```bash
-.venv/bin/oktografx-server admin-token rotate    # invalidates the old token and every session
+.venv/bin/oktografx-server admin-token status   # which of the two this state directory is running
+.venv/bin/oktografx-server admin-token rotate   # prints the value once; signs out every browser holding the old one
+.venv/bin/oktografx-server admin-token clear    # stop requiring a token again
 ```
+
+**Lost the admin token.** There is nothing to recover — only a hash is stored — so rotate it. The new value
+is printed once, and every browser signed in with the old one is signed out.
 
 **Retire a key.** Revoke stops it on the next request; delete removes the record (refused while a session
 still uses it):

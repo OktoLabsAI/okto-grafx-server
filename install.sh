@@ -11,12 +11,13 @@
 #      release's SHA256SUMS;
 #   3. installs it into an environment of its own — `uv tool install` when uv is present, otherwise a
 #      venv under ~/.local/share — and puts `oktografx-server` in ~/.local/bin;
-#   4. creates the state directory, but only when there is not one already: re-running `init` mints a
-#      new administrator token and invalidates the old one, and an installer that surprises you about
+#   4. creates the state directory, but only when there is not one already: re-running `init` would
+#      mint a new administrator token over the old one, and an installer that surprises you about
 #      that is worse than one that stops;
 #   5. starts the daemon on 127.0.0.1 and waits for /api/v1/health;
-#   6. shows the administrator token in its summary — the one it minted, or the one already in
-#      <state>/admin-token (mode 0600) — plus the rotate command that mints a new one if it is lost.
+#   6. tells you what opened. By default that is: no token, and the console answers this machine only.
+#      With --with-admin-token it prints the token once, keeps a copy at <state>/admin-token (0600),
+#      and names the command that mints a new one if that file is ever lost.
 #
 # Nothing runs as root, nothing is written outside $HOME unless you pass --prefix, and --dry-run prints
 # every command without touching the filesystem. Flags through a pipe need `bash -s --`:
@@ -47,6 +48,7 @@ DRY=0
 DO_INIT=1
 DO_RUN=1
 WRITE_TOKEN_FILE=1
+WITH_TOKEN=0
 
 usage() {
   cat <<'USAGE'
@@ -67,7 +69,9 @@ options
   --from-tree DIR    install this source tree instead of a wheel (development, CI)
   --no-init          install the command only, create no state directory
   --no-run           do not start the daemon
-  --no-token-file    print the token, do not write <state>/admin-token
+  --with-admin-token require an administrator token. Without it the console is open to this machine
+                     only, which is the default: nothing is minted and nothing is printed
+  --no-token-file    with --with-admin-token, print the token instead of also writing <state>/admin-token
   --dry-run          print the commands, change nothing
   -h, --help         this text
 
@@ -106,6 +110,7 @@ while [ $# -gt 0 ]; do
     --no-init) DO_INIT=0; shift ;;
     --no-run) DO_RUN=0; shift ;;
     --no-token-file) WRITE_TOKEN_FILE=0; shift ;;
+    --with-admin-token) WITH_TOKEN=1; shift ;;
     --dry-run) DRY=1; shift ;;
     -h | --help)
       usage
@@ -298,13 +303,17 @@ if [ "$DO_INIT" = "1" ]; then
   if [ -f "$STATE_DIR/server.toml" ]; then
     log "State directory already exists"
     say "leaving $STATE_DIR untouched"
-    say "'init' a second time would mint a new administrator token and invalidate yours;"
-    say "rotate it deliberately with: $BINARY admin-token rotate"
+    say "'init' a second time would mint a new administrator token over yours;"
+    say "require one deliberately with: $BINARY --state-dir $STATE_DIR admin-token rotate"
   else
     log "Creating the state directory"
     if [ "$DRY" = "1" ]; then
       printf '   [dry-run] mkdir -p %s\n' "$GRAPH_ROOT"
-      printf '   [dry-run] %s --state-dir %s init --root %s --port %s\n' "$BIN_PATH" "$STATE_DIR" "$GRAPH_ROOT" "$PORT"
+      if [ "$WITH_TOKEN" = "1" ]; then
+        printf '   [dry-run] %s --state-dir %s init --root %s --port %s --with-admin-token\n' "$BIN_PATH" "$STATE_DIR" "$GRAPH_ROOT" "$PORT"
+      else
+        printf '   [dry-run] %s --state-dir %s init --root %s --port %s\n' "$BIN_PATH" "$STATE_DIR" "$GRAPH_ROOT" "$PORT"
+      fi
     else
       # `init` records allowed_roots; a root that does not exist yet would make every later `db add`
       # under it a refusal, so the installer creates the one it just promised.
@@ -317,26 +326,34 @@ if [ "$DO_INIT" = "1" ]; then
         say "store root  $RESOLVED_ROOT (symlinks resolved from $GRAPH_ROOT)"
       fi
       GRAPH_ROOT="$RESOLVED_ROOT"
-      if ! INIT_OUT="$("$BIN_PATH" --state-dir "$STATE_DIR" init --root "$GRAPH_ROOT" --port "$PORT" 2>&1)"; then
-        printf '%s\n' "$INIT_OUT" | sed 's/^/   /' >&2
-        fail "'init' refused to create $STATE_DIR"
-      fi
-      # awk over a here-string rather than `printf | sed | head`: the token line is the only thing we
-      # want out of init's output, and a pipeline whose reader quits early is a SIGPIPE waiting to be
-      # mistaken for a failed command under `set -e`/`pipefail`.
-      TOKEN="$(awk '{ if (match($0, /okga_[A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-]+/)) { print substr($0, RSTART, RLENGTH); exit } }' <<<"$INIT_OUT")"
-      if [ -z "$TOKEN" ]; then
-        printf '%s\n' "$INIT_OUT" | sed 's/^/   /' >&2
-        fail "init succeeded but printed no administrator token"
+      if [ "$WITH_TOKEN" = "1" ]; then
+        if ! INIT_OUT="$("$BIN_PATH" --state-dir "$STATE_DIR" init --root "$GRAPH_ROOT" --port "$PORT" --with-admin-token 2>&1)"; then
+          printf '%s\n' "$INIT_OUT" | sed 's/^/   /' >&2
+          fail "'init' refused to create $STATE_DIR"
+        fi
+        # awk over a here-string rather than `printf | sed | head`: the token line is the only thing
+        # we want out of init's output, and a pipeline whose reader quits early is a SIGPIPE waiting
+        # to be mistaken for a failed command under `set -e`/`pipefail`.
+        TOKEN="$(awk '{ if (match($0, /okga_[A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-]+/)) { print substr($0, RSTART, RLENGTH); exit } }' <<<"$INIT_OUT")"
+        if [ -z "$TOKEN" ]; then
+          printf '%s\n' "$INIT_OUT" | sed 's/^/   /' >&2
+          fail "init succeeded but printed no administrator token"
+        fi
+        if [ "$WRITE_TOKEN_FILE" = "1" ]; then
+          (
+            umask 177
+            printf '%s\n' "$TOKEN" >"$STATE_DIR/admin-token"
+          )
+          say "token file  $STATE_DIR/admin-token (mode 600)"
+        fi
+      else
+        if ! INIT_OUT="$("$BIN_PATH" --state-dir "$STATE_DIR" init --root "$GRAPH_ROOT" --port "$PORT" 2>&1)"; then
+          printf '%s\n' "$INIT_OUT" | sed 's/^/   /' >&2
+          fail "'init' refused to create $STATE_DIR"
+        fi
+        say "no administrator token minted: the console will answer this machine only"
       fi
       say "server.toml and server.db written"
-      if [ "$WRITE_TOKEN_FILE" = "1" ]; then
-        (
-          umask 177
-          printf '%s\n' "$TOKEN" >"$STATE_DIR/admin-token"
-        )
-        say "token file  $STATE_DIR/admin-token (mode 600)"
-      fi
     fi
   fi
 fi
@@ -384,14 +401,26 @@ elif [ -f "$STATE_DIR/admin-token" ]; then
   say "            minted by an earlier run; this is the copy in ${STATE_DIR}/admin-token (600)"
   TOKEN_SHOWN=1
 else
-  # We cannot know why there is no file — this state may have been created with --no-token-file, or the
-  # file may simply be gone — so the message states the fact and the way out, and does not blame anyone.
-  say "token       no administrator token is available: ${STATE_DIR}/admin-token does not exist. The"
-  say "            server keeps only a hash, so nothing can be recovered from it — mint one:"
-  say "            $BINARY --state-dir $STATE_DIR admin-token rotate"
+  # Nothing to show. Whether that means "no token exists" or "one exists and you have lost it" is the
+  # server's answer, not ours to guess: the control database knows, a terminal scrollback does not.
+  TOKEN_REQUIRED=0
+  if [ "$DRY" != "1" ] && [ -x "$BIN_PATH" ] \
+    && "$BIN_PATH" --state-dir "$STATE_DIR" admin-token status 2>/dev/null | grep -q "a token is required"; then
+    TOKEN_REQUIRED=1
+  fi
+  if [ "$TOKEN_REQUIRED" = "1" ]; then
+    say "token       required, and not in ${STATE_DIR}/admin-token. The server keeps only a hash, so"
+    say "            nothing can be recovered from it: mint one you can use"
+    say "            $BINARY --state-dir $STATE_DIR admin-token rotate"
+  else
+    say "access      no token required. The console answers this machine only — any process that can"
+    say "            reach 127.0.0.1 is administrator here, anything from elsewhere is refused"
+    say "require one $BINARY --state-dir $STATE_DIR admin-token rotate"
+    say "            or the same switch in Settings, which shows the value once"
+  fi
 fi
-say "login       open http://127.0.0.1:$PORT/ and paste it into the sign-in screen"
 if [ "$TOKEN_SHOWN" = "1" ]; then
+  say "login       open http://127.0.0.1:$PORT/ and paste it into the sign-in screen"
   say "lost it?    $BINARY --state-dir $STATE_DIR admin-token rotate"
   say "            mints a new token and invalidates the old one, and every session signed in with it"
 fi

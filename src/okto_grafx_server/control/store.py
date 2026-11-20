@@ -587,6 +587,20 @@ class ControlStore:
     def admin_token_configured(self) -> bool:
         return bool(self._read("SELECT 1 FROM admin_auth WHERE id = 1"))
 
+    def admin_token_rotated_at(self) -> str | None:
+        rows = self._read("SELECT rotated_at FROM admin_auth WHERE id = 1")
+        return str(rows[0]["rotated_at"]) if rows else None
+
+    def clear_admin_token(self) -> None:
+        """Forget the administrator token, which puts the console back to loopback-only access.
+
+        Sessions are left alone on purpose. They were issued to a browser that proved the token, and
+        pulling them out from under an operator who is *turning a wall down* would log them out of
+        the work they are standing in.
+        """
+
+        self._write("DELETE FROM admin_auth WHERE id = 1", ())
+
     def check_admin_token(self, candidate: str) -> bool:
         rows = self._read("SELECT token_hash FROM admin_auth WHERE id = 1")
         if not rows:
@@ -617,6 +631,14 @@ class ControlStore:
     def revoke_session(self, session_id: str | None) -> None:
         if session_id:
             self._write("DELETE FROM admin_session WHERE id = ?", (session_id,))
+
+    def revoke_all_sessions(self) -> int:
+        """Sign every browser out. Rotation says "the old token and every session signed in with it
+        stop working", and a session that outlives the credential that produced it contradicts that.
+        """
+
+        cursor = self._write("DELETE FROM admin_session", ())
+        return cursor.rowcount or 0
 
     def prune_sessions(self) -> int:
         cursor = self._write("DELETE FROM admin_session WHERE expires_at <= ?", (now_iso(),))

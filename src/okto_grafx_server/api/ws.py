@@ -36,6 +36,7 @@ from .context import (
     Principal,
     SESSION_COOKIE,
     ServerContext,
+    admin_open_to_loopback,
     principal_allows_writes,
     require_scope,
     summarize_parameters,
@@ -378,19 +379,28 @@ def _authenticate_websocket(ctx: ServerContext, websocket: WebSocket) -> Princip
     cookies = websocket.cookies or {}
     session_id = cookies.get(SESSION_COOKIE)
     if session_id and ctx.store.validate_session(session_id):
-        return Principal(
-            kind="admin",
-            label="admin",
-            databases=tuple(
-                sorted(record.slug for record in ctx.store.list_databases() if record.enabled)
-            ),
-            allow_writes=True,
-        )
+        return _loopback_admin(ctx)
+    # While no token is configured the console works from this machine with no cookie at all. A
+    # handshake is treated as a change, not a read: browsers always send Origin on a WebSocket, so a
+    # page that is not on this side fails the same-site test before it can open a write channel.
+    if admin_open_to_loopback(ctx, websocket, method="WEBSOCKET"):
+        return _loopback_admin(ctx)
     raise AppError(
         "Send the API key as 'Authorization: Bearer okg_…', '?token=…', the "
         "'bearer.<token>' subprotocol, or sign in as administrator.",
         status=1008,
         code="missing_api_key",
+    )
+
+
+def _loopback_admin(ctx: ServerContext) -> Principal:
+    return Principal(
+        kind="admin",
+        label="admin:loopback",
+        databases=tuple(
+            sorted(record.slug for record in ctx.store.list_databases() if record.enabled)
+        ),
+        allow_writes=True,
     )
 
 

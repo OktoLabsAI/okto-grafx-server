@@ -5,8 +5,9 @@
 # CI runs it against the working tree; the release workflow runs it against the published artifacts.
 # Same script, so "the installer passed in CI" and "the installer you are about to pipe into bash" mean
 # the same thing. Every assertion below is something an operator would notice: the command runs, the
-# token gets printed once and not re-minted on a rerun, the console answers, an attached store answers a
-# query, and uninstalling leaves the data alone.
+# default install leaves no credential behind and the console answers this machine anyway, turning a
+# token on closes that door and the summary says where the value is, an attached store answers a query,
+# and uninstalling leaves the data alone.
 #
 # env
 #   OKGIT_INSTALL     path to install.sh      (default ./install.sh)
@@ -128,23 +129,20 @@ step "Install, init, start"
 if ! run_install; then
   die "install.sh exited non-zero"
 fi
-expect_log 'token       okga_'
-# "It was printed once, in an earlier run" is not a handover: the operator needs a value they can paste
-# now, and a way out if they misplace it.
+expect_log 'access      no token required'
+# The default handover has no secret to print, so it has to say what the posture *is*, in the terms a
+# reader can act on: who gets in, and the one command that changes it.
 expect_log 'admin-token rotate'
 [ -x "$BIN" ] || die "$BIN is not executable"
 "$BIN" --version >"$SANDBOX/version.txt" 2>&1
 grep -Eq 'oktografx-server [0-9]+' "$SANDBOX/version.txt" || die "--version did not print a version"
 [ -f "$OKGIT_STATE/server.toml" ] || die "init did not write server.toml"
 [ -f "$OKGIT_STATE/server.db" ] || die "init did not write server.db"
-[ -f "$OKGIT_STATE/admin-token" ] || die "no admin-token file was written"
-ok "$(cat "$SANDBOX/version.txt")"
-
-if [ "$(mode_of "$OKGIT_STATE/admin-token")" = "-rw-------" ]; then
-  ok "admin-token is mode 600"
-else
-  die "admin-token is $(mode_of "$OKGIT_STATE/admin-token"), expected -rw-------"
+if [ -e "$OKGIT_STATE/admin-token" ]; then
+  die "the default install minted a credential it did not ask for"
 fi
+ok "$(cat "$SANDBOX/version.txt")"
+ok "no credential minted, none left behind"
 
 step "The console answers on loopback"
 curl -fsS "$BASE/api/v1/health" >"$SANDBOX/health.json"
@@ -157,31 +155,66 @@ grep -q 'name="oktografx:console"' "$SANDBOX/shell.html" ||
   die "/ did not serve the built console: $(head -c 200 "$SANDBOX/shell.html")"
 ok "health and the console shell"
 
-TOKEN="$(cat "$OKGIT_STATE/admin-token")"
+# The whole point of the default: the administrator surface answers from this machine with no cookie,
+# no token, no setup step between installing and seeing your stores.
+curl -fsS "$BASE/admin/api/databases" >"$SANDBOX/databases.json"
+grep -q '"databases":\[\]' "$SANDBOX/databases.json" ||
+  die "an anonymous loopback request was not treated as administrator: $(cat "$SANDBOX/databases.json")"
+curl -fsS "$BASE/admin/api/session" >"$SANDBOX/session.json"
+grep -q '"auth":"open-loopback"' "$SANDBOX/session.json" ||
+  die "the console did not report the open posture: $(cat "$SANDBOX/session.json")"
+ok "an anonymous request from this machine is administrator"
+
+step "Requiring a token closes the door, and this machine still gets in"
+# The opt-in from the shell, which is the same switch Settings shows: after it, the anonymous request
+# above has to be refused, and the printed value has to be worth presenting.
+TOKEN="$("$BIN" --state-dir "$OKGIT_STATE" admin-token rotate | tr -d '[:space:]' | grep -o 'okga_[A-Za-z0-9_-]*' | head -1)"
+[ -n "$TOKEN" ] || die "admin-token rotate printed no token"
+if curl -fsS "$BASE/admin/api/databases" >/dev/null 2>&1; then
+  die "the administrator surface stayed open after a token was configured"
+fi
+CODE="$(curl -sS -o "$SANDBOX/refused.json" -w '%{http_code}' "$BASE/admin/api/databases")"
+[ "$CODE" = "401" ] || die "anonymous loopback after rotation answered $CODE, expected 401"
 curl -fsS -X POST "$BASE/admin/api/login" -H 'Content-Type: application/json' \
   -d "{\"token\":\"$TOKEN\"}" -c "$COOKIES" >"$SANDBOX/login.json"
-grep -q '"signed_in":true' "$SANDBOX/login.json" || die "the printed token did not log in"
+grep -q '"signed_in":true' "$SANDBOX/login.json" || die "the rotated token did not log in"
 curl -fsS -b "$COOKIES" "$BASE/admin/api/session" >"$SANDBOX/session.json"
-grep -q '"signed_in":true' "$SANDBOX/session.json" ||
-  die "session cookie not accepted: $(cat "$SANDBOX/session.json")"
-ok "the token from the file logs in, and the cookie holds the session"
+grep -q '"auth":"token"' "$SANDBOX/session.json" ||
+  die "the session did not report token auth: $(cat "$SANDBOX/session.json")"
+ok "401 without a credential, 200 with the rotated one"
 
-step "A rerun must not mint a new token"
+step "A rerun over a state directory that requires a token says so"
 if ! run_install --no-run; then
   die "a second install.sh exited non-zero"
 fi
 expect_log 'State directory already exists'
-if [ "$TOKEN" != "$(cat "$OKGIT_STATE/admin-token")" ]; then
-  die "the administrator token changed on a rerun — the old one would have stopped working"
+# Nothing was minted (the state directory is not re-initialised), and the summary must not imply the
+# operator has a credential in the usual place when they do not.
+expect_log 'token       required, and not in'
+# The command is printed as the operator types it (`oktografx-server`, from PATH), with this state
+# directory in it — the harness's own path may differ by a doubled slash, so match the shape.
+expect_log 'state-dir .*admin-token rotate'
+ok "no re-init, and the summary names the way out"
+
+# The operator does the sensible thing and keeps the value where the installer would have put it; from
+# here on a rerun can show it. "It was printed once, in an earlier run" is not a handover: this is the
+# run that happens after the scrollback is gone, and the one where people give up and re-init.
+(
+  # Scoped umask, exactly as install.sh does it: a bare `umask 177` here would leave the rest of the
+  # script — and the next install.sh — creating directories nothing else can read.
+  umask 177
+  printf '%s\n' "$TOKEN" >"$OKGIT_STATE/admin-token"
+)
+mode_check="$(mode_of "$OKGIT_STATE/admin-token")"
+[ "$mode_check" = "-rw-------" ] || die "admin-token is $mode_check, expected -rw-------"
+if ! run_install --no-run; then
+  die "a third install.sh exited non-zero"
 fi
-# The value has to be *shown*, again, read back from the file: this is the run that happens after the
-# terminal scrollback is gone, and it is the one where people give up and re-init (which would silently
-# invalidate the token they are still using).
 if ! grep -q "token       $TOKEN" "$LOG"; then
   die "the rerun's summary did not list the token the operator has to paste"
 fi
 expect_log 'admin-token rotate'
-ok "same token, existing state untouched, and the summary lists it plus how to mint another"
+ok "admin-token is mode 600, and the summary lists it plus how to mint another"
 
 step "Attach a store and read it back over the data plane"
 # The interpreter is whatever the installed command is running on — the venv's for a pip install, the

@@ -156,9 +156,9 @@ def main() -> int:
     parser.add_argument("--slug", default="", help="slug to register it under (default: directory name)")
     args = parser.parse_args()
 
-    if not args.admin_token:
-        print("an admin token is required (--admin-token or OKG_ADMIN_TOKEN)", file=sys.stderr)
-        return 2
+    # No token means the flow is testing the default posture: no credential exists, and this machine is
+    # the administrator. A token here means the same flow is being run against a server that requires one.
+    open_access = not args.admin_token
     store = Path(args.store).resolve()
     if not store.is_dir():
         print(f"{store} is not a directory", file=sys.stderr)
@@ -168,30 +168,55 @@ def main() -> int:
     before = _tree(store)
     slug = args.slug or store.name
 
-    section("1. the doors are closed before anyone signs in")
+    section("1. the doors, with nobody signed in")
     refused = daemon.anon.get("/admin/api/databases")
-    check(
-        "admin plane refuses an anonymous caller",
-        envelope_error_is(refused, "admin_session_required", 401),
-        f"{refused.status_code} {code_of(refused)}",
-    )
     refused_data = daemon.anon.get("/api/v1/databases")
-    check("data plane refuses an anonymous caller", refused_data.status_code == 401, str(refused_data.status_code))
+    if open_access:
+        check(
+            "this machine is the administrator without a credential",
+            refused.status_code == 200 and refused_data.status_code == 200,
+            f"admin {refused.status_code}, data {refused_data.status_code}",
+        )
+        door = daemon.anon.get("/admin/api/session").json()
+        check(
+            "the console says so out loud",
+            door.get("signed_in") is True and door.get("auth") == "open-loopback",
+            json.dumps(door)[:110],
+        )
+    else:
+        check(
+            "admin plane refuses an anonymous caller",
+            envelope_error_is(refused, "admin_session_required", 401),
+            f"{refused.status_code} {code_of(refused)}",
+        )
+        check(
+            "data plane refuses an anonymous caller",
+            refused_data.status_code == 401,
+            str(refused_data.status_code),
+        )
 
-    section("2. the administrator signs in")
-    login = daemon.login()
-    check("bootstrap token opens a session", login.status_code == 200, str(login.status_code))
-    check(
-        "the session cookie is httpOnly",
-        "httponly" in "; ".join(login.headers.get_list("set-cookie")).lower(),
-        login.headers.get("set-cookie", "")[:58],
-    )
-    session = daemon.admin.get("/admin/api/session").json()
-    check(
-        "session reports the admin door",
-        session.get("signed_in") is True and session.get("token_configured") is True,
-        json.dumps(session),
-    )
+    section("2. the administrator" if not open_access else "2. there is nothing to sign in to")
+    if open_access:
+        door = daemon.admin.get("/admin/api/session").json()
+        check(
+            "no token is configured, so none can be lost",
+            door.get("token_configured") is False and door.get("token_rotated_at") is None,
+            json.dumps(door)[:110],
+        )
+    else:
+        login = daemon.login()
+        check("bootstrap token opens a session", login.status_code == 200, str(login.status_code))
+        check(
+            "the session cookie is httpOnly",
+            "httponly" in "; ".join(login.headers.get_list("set-cookie")).lower(),
+            login.headers.get("set-cookie", "")[:58],
+        )
+        session = daemon.admin.get("/admin/api/session").json()
+        check(
+            "session reports the admin door",
+            session.get("signed_in") is True and session.get("token_configured") is True,
+            json.dumps(session),
+        )
 
     section("3. an external store is attached by reference")
     inspect = daemon.admin.post("/admin/api/databases/inspect", json={"path": str(store)})
@@ -522,7 +547,6 @@ def main() -> int:
     entries = daemon.admin.get("/admin/api/audit", params={"limit": 400}).json().get("entries", [])
     actions = {entry["action"] for entry in entries}
     expected = {
-        "login",
         "database.attach",
         "database.update",
         "key.create",
@@ -539,6 +563,10 @@ def main() -> int:
         "ws.commit",
         "ws.rollback",
     }
+    if not open_access:
+        # In the default posture nobody had to sign in to get here; the sign-in and the token switch are
+        # audited by section 15, which runs after this snapshot.
+        expected.add("login")
     check("every surface leaves an audit trail", expected <= actions,
           f"missing: {sorted(expected - actions) or 'nothing'} of {len(actions)} actions")
     check("the audit records who acted", any(entry["actor"].startswith("key:") for entry in entries),
@@ -557,6 +585,46 @@ def main() -> int:
     after = daemon.data.post(f"/api/v1/databases/{slug}/query", json={"query": "MATCH (n) RETURN n LIMIT 1"})
     check("a revoked key stops working immediately", after.status_code == 401,
           f"{after.status_code} {code_of(after)}")
+
+    if open_access:
+        section("15. the administrator switch: on, rotated, off")
+        # The default is open, so the switch has to work from the open side — that is the only side it
+        # will ever be pulled from. It ends where it started, because the stages after this one (the
+        # browser, the README examples) run against this same daemon.
+        minted = daemon.admin.post("/admin/api/admin-token").json()
+        token = minted.get("admin_token", "")
+        check(
+            "the open console can require a token",
+            token.startswith("okga_") and minted.get("signed_in") is True and minted.get("shown_once") is True,
+            json.dumps(minted)[:110],
+        )
+        with httpx.Client(base_url=daemon.base, timeout=30.0) as stranger:
+            check(
+                "a request with no credential is refused from then on",
+                stranger.get("/admin/api/status").status_code == 401,
+                str(stranger.get("/admin/api/status").status_code),
+            )
+            check("the minted token opens a session",
+                  stranger.post("/admin/api/login", json={"token": token}).status_code == 200)
+            check("minting twice is refused: that is what rotation is for",
+                  stranger.post("/admin/api/admin-token").status_code == 409)
+            rotated = stranger.post("/admin/api/admin-token/rotate").json()
+            check("rotation invalidates the session that held the old value",
+                  stranger.get("/admin/api/databases").status_code == 401,
+                  str(stranger.get("/admin/api/databases").status_code))
+            check("the rotated value signs the browser back in",
+                  stranger.post("/admin/api/login", json={"token": rotated.get("admin_token", "")}).status_code == 200)
+            check("and the requirement can be lifted again",
+                  stranger.delete("/admin/api/admin-token").status_code == 200)
+        check("the console is open to this machine again",
+              daemon.anon.get("/admin/api/databases").status_code == 200)
+        switched = {entry["action"] for entry in
+                    daemon.admin.get("/admin/api/audit", params={"limit": 400}).json().get("entries", [])}
+        check(
+            "the switch is audited, including the sign-ins it caused",
+            {"admin_token.mint", "admin_token.rotate", "admin_token.disable", "login"} <= switched,
+            f"missing: {sorted({'admin_token.mint', 'admin_token.rotate', 'admin_token.disable', 'login'} - switched) or 'nothing'}",
+        )
 
     return finish(daemon)
 

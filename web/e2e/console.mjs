@@ -3,7 +3,7 @@
  * Browser acceptance for the operator console (PLAN.md item 18, front half).
  *
  * It drives the *built* console in Chromium against a live daemon over real HTTP and WebSocket:
- * sign in, attach a store by reference, read its schema, run a statement, draw the result, search
+ * sign in only if the server asks for a token, attach a store by reference, read its schema, run a statement, draw the result, search
  * it twice, mint an API key and then use that key as the data-plane credential — the same motions
  * an operator makes, with the same two doors the daemon enforces.
  *
@@ -82,8 +82,13 @@ async function expectText(page, text, { timeout = 15000, name } = {}) {
 // --------------------------------------------------------------------------- the flow
 
 const baseUrl = args.baseUrl ?? "http://127.0.0.1:8737";
-if (!args.adminToken || !args.store) {
-  console.error("usage: node e2e/console.mjs --base-url URL --admin-token TOKEN --store PATH [--shots DIR]");
+if (!args.store) {
+  console.error(
+    "usage: node e2e/console.mjs --base-url URL [--admin-token TOKEN] --store PATH [--shots DIR]",
+  );
+  console.error(
+    "       omit --admin-token to drive a server that requires none, which is the default posture",
+  );
   process.exit(2);
 }
 // The daemon resolves store paths without following symlinks, so hand it the real path: on macOS
@@ -115,22 +120,54 @@ page.on("console", (message) => {
 page.on("pageerror", (error) => consoleErrors.push(String(error)));
 
 try {
-  section("1. an unauthenticated visitor is sent to the login screen");
-  await page.goto(`${baseUrl}/databases`, { waitUntil: "networkidle" });
-  say("the console redirects to /login", page.url().includes("/login"), page.url());
-  await shot(page, "01-login");
-  say(
-    "the login screen explains where the token comes from",
-    (await page.getByText("oktografx-server init").count()) > 0,
-  );
+  if (!args.adminToken) {
+    section("1. this machine is the administrator: there is no sign-in screen");
+    await page.goto(`${baseUrl}/databases`, { waitUntil: "networkidle" });
+    say("no redirect to /login", !page.url().includes("/login"), page.url());
+    say("the rail names the posture", (await expectText(page, "this machine only")) === true);
+    say(
+      "it offers the switch rather than a sign-out of a door with no lock",
+      (await page.getByRole("button", { name: /sign out/i }).count()) === 0 &&
+        (await page.getByRole("link", { name: /token is off/i }).count()) === 1,
+    );
+    await shot(page, "01-open");
 
-  section("2. the administrator signs in");
-  await page.getByLabel("admin token").fill(args.adminToken);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL(/\/databases$/, { timeout: 15000 });
-  say("the store list loads", (await page.getByRole("button", { name: "Add existing store" }).count()) === 1);
-  say("the admin door is named in the header", (await expectText(page, "admin session")) === true);
-  await shot(page, "02-databases");
+    section("2. Settings carries the switch, and the commands around it");
+    await page.goto(`${baseUrl}/settings`, { waitUntil: "networkidle" });
+    say(
+      "the panel says no token is required",
+      (await expectText(page, "no token — this machine only")) === true,
+    );
+    say(
+      "and prints the command-line version of the same choice",
+      (await page.getByText(/admin-token rotate/).first().count()) > 0,
+    );
+    // Armed, not sprung: requiring a token here would change the posture under every step that follows.
+    say(
+      "the switch waits to be confirmed before it does anything",
+      (await page.getByRole("button", { name: /require a token/i }).count()) === 1 &&
+        (await page.getByText(/Any process on this machine can create API keys/i).count()) === 0,
+    );
+    await shot(page, "02-settings");
+    await page.goto(`${baseUrl}/databases`, { waitUntil: "networkidle" });
+  } else {
+    section("1. an unauthenticated visitor is sent to the login screen");
+    await page.goto(`${baseUrl}/databases`, { waitUntil: "networkidle" });
+    say("the console redirects to /login", page.url().includes("/login"), page.url());
+    await shot(page, "01-login");
+    say(
+      "the login screen says what it wants and where the session lives",
+      (await page.getByText("Sign in with the administrator token").count()) > 0,
+    );
+
+    section("2. the administrator signs in");
+    await page.getByLabel("admin token").fill(args.adminToken);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL(/\/databases$/, { timeout: 15000 });
+    say("the store list loads", (await page.getByRole("button", { name: "Add existing store" }).count()) === 1);
+    say("the admin door is named in the header", (await expectText(page, "admin session")) === true);
+    await shot(page, "02-databases");
+  }
 
   section("3. the store is attached through the console");
   const alreadyAttached = (await page.getByRole("link", { name: slug }).count()) > 0;

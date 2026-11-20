@@ -30,7 +30,9 @@ from ..errors import AppError, bad_request
 from .. import __version__
 from .context import (
     SESSION_COOKIE,
+    admin_open_to_loopback,
     admin_session_id,
+    admin_token_required,
     context_of,
     require_admin,
 )
@@ -128,10 +130,16 @@ def logout(request: Request, response: Response, _=Depends(require_admin)) -> di
 @router.get("/session")
 def session(request: Request) -> dict[str, Any]:
     ctx = context_of(request)
-    signed_in = ctx.store.validate_session(admin_session_id(request))
+    open_access = admin_open_to_loopback(ctx, request)
+    signed_in = ctx.store.validate_session(admin_session_id(request)) or open_access
     return {
+        # `signed_in` answers the question the console actually asks — *may this visitor use the
+        # console* — which is not the same question as "does a cookie exist". With no token
+        # configured, an anonymous visitor from this machine may.
         "signed_in": signed_in,
         "token_configured": ctx.store.admin_token_configured(),
+        "auth": "token" if admin_token_required(ctx) else "open-loopback",
+        "token_rotated_at": ctx.store.admin_token_rotated_at(),
         "server_version": __version__,
     }
 
@@ -176,6 +184,16 @@ def settings(request: Request, _=Depends(require_admin)) -> dict[str, Any]:
             "anything else. A local process with filesystem access can open these stores "
             "directly: this server is logical access control, not an OS sandbox.",
         },
+        "admin_auth": {
+            "mode": "token" if admin_token_required(ctx) else "open-loopback",
+            "token_configured": ctx.store.admin_token_configured(),
+            "token_rotated_at": ctx.store.admin_token_rotated_at(),
+            "commands": {
+                "require": f"oktografx-server --state-dir {config.state_dir} admin-token rotate",
+                "rotate": f"oktografx-server --state-dir {config.state_dir} admin-token rotate",
+                "stop_requiring": f"oktografx-server --state-dir {config.state_dir} admin-token clear",
+            },
+        },
         "database_options": database_option_schema(),
         "maintenance_actions": describe_actions(),
     }
@@ -204,13 +222,72 @@ def rotate_token(request: Request, _=Depends(require_admin)) -> dict[str, Any]:
     ctx = context_of(request)
     token = generate_admin_token()
     ctx.store.set_admin_token(token)
-    session_id = admin_session_id(request)
-    ctx.store.revoke_session(session_id)
+    ctx.store.revoke_all_sessions()
     ctx.store.audit(actor="admin", action="admin_token.rotate", outcome="ok")
     return {
         "admin_token": token,
         "shown_once": True,
-        "note": "The previous token and this browser session stop working immediately.",
+        "note": "The previous token stops working, and so does every browser signed in with it — "
+        "including this one.",
+    }
+
+
+@router.post("/admin-token")
+def mint_token(request: Request, response: Response, _=Depends(require_admin)) -> dict[str, Any]:
+    """Turn the token wall on.
+
+    Only valid while there is no token: minting a second one over a live token is how an operator
+    silently invalidates the credential they are holding, and that is what rotation is for.
+    """
+
+    ctx = context_of(request)
+    if ctx.store.admin_token_configured():
+        raise AppError(
+            "An administrator token is already configured. Rotate it instead: the old value stops "
+            "working the moment a new one exists, which is the point of rotating and not of minting.",
+            status=409,
+            code="admin_token_exists",
+        )
+    token = generate_admin_token()
+    ctx.store.set_admin_token(token)
+    # The browser in front of the operator just proved it is on this machine and asked for the wall;
+    # making it sign in with a value it is reading for the first time would only risk losing it.
+    session_id = ctx.store.create_session(ttl_hours=ADMIN_COOKIE_TTL_HOURS)
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_id,
+        httponly=True,
+        samesite="strict",
+        secure=False,
+        max_age=int(ADMIN_COOKIE_TTL_HOURS * 3600),
+        path="/",
+    )
+    ctx.store.audit(actor="admin", action="admin_token.mint", outcome="ok")
+    return {
+        "admin_token": token,
+        "shown_once": True,
+        "signed_in": True,
+        "note": "Keep this value: the server stores only a hash, so rotation is the only way back.",
+    }
+
+
+@router.delete("/admin-token")
+def disable_token(request: Request, _=Depends(require_admin)) -> dict[str, Any]:
+    """Take the wall down: administrator access goes back to this machine only."""
+
+    ctx = context_of(request)
+    if not ctx.store.admin_token_configured():
+        raise AppError(
+            "No administrator token is configured, so nothing is being required.",
+            status=409,
+            code="admin_token_missing",
+        )
+    ctx.store.clear_admin_token()
+    ctx.store.audit(actor="admin", action="admin_token.disable", outcome="ok")
+    return {
+        "auth": "open-loopback",
+        "note": "Any process on this machine can now reach the console. Requests from anywhere else "
+        "are still refused, and API keys are unaffected.",
     }
 
 

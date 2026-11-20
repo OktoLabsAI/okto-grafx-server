@@ -24,6 +24,23 @@ DEFAULT_BIND_HOST = "127.0.0.1"
 DEFAULT_BIND_PORT = 8737
 STORE_MARKER = "grafx.meta"
 
+# The addresses that count as "this machine" for binding and for the administrator door. `localhost`
+# belongs here because it is how people type the loopback address; a host name that resolves to
+# loopback by way of /etc/hosts does not, and is deliberately not our problem to resolve.
+LOOPBACK_BIND_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def host_is_loopback(host: str) -> bool:
+    """Whether ``host`` names this machine, with or without a port, brackets included."""
+
+    host = (host or "").strip()
+    if host.startswith("["):
+        end = host.find("]")
+        host = host[1:end] if end > 0 else host.strip("[]")
+    elif host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return host in LOOPBACK_BIND_HOSTS
+
 # The plan fixes concurrent write sessions at "default 1, max 4". The engine grants one writer
 # lease per store, so anything above four only queues more sessions behind a lease that cannot be
 # shared — a larger number would be a knob that lies.
@@ -161,7 +178,7 @@ def validate_config(config: ServerConfig) -> ServerConfig:
             code="invalid_configuration",
             field="bind_port",
         )
-    remote_host = config.bind_host not in {"127.0.0.1", "localhost", "::1"}
+    remote_host = not host_is_loopback(config.bind_host)
     if remote_host and not config.allow_remote_binding:
         raise AppError(
             f"bind_host {config.bind_host!r} is not loopback. The server has no TLS and no "

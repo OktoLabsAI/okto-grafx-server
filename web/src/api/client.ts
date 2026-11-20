@@ -130,6 +130,16 @@ export const admin = {
     call<{ admin_token: string; shown_once: boolean; note: string }>(ADMIN_BASE, "/admin-token/rotate", {
       method: "POST",
     }),
+  /** Turn the token wall on from an open console. The daemon signs this browser in with the value. */
+  mintAdminToken: () =>
+    call<{ admin_token: string; shown_once: boolean; signed_in: boolean; note: string }>(
+      ADMIN_BASE,
+      "/admin-token",
+      { method: "POST" },
+    ),
+  /** Take the wall down: administrator access becomes this machine only again. */
+  disableAdminToken: () =>
+    call<{ auth: string; note: string }>(ADMIN_BASE, "/admin-token", { method: "DELETE" }),
 
   databases: () => call<{ databases: DatabaseRecord[] }>(ADMIN_BASE, "/databases"),
   database: (slug: string) => call<DatabaseRecord>(ADMIN_BASE, `/databases/${slug}`),
@@ -258,6 +268,13 @@ function requestOptions(): RequestOptions {
 export interface SessionInfo {
   signed_in: boolean;
   token_configured: boolean;
+  /**
+   * How the daemon is letting this visitor in. `open-loopback` means no credential is required and
+   * the request arrived from the machine the server runs on; `token` means a credential is demanded,
+   * whether or not this visitor already has one.
+   */
+  auth?: "token" | "open-loopback";
+  token_rotated_at?: string | null;
   server_version?: string;
 }
 
@@ -302,6 +319,14 @@ export interface Settings {
     /** Whether database options may point the store's own OpenMetrics sink at another machine. */
     allow_remote_store_metrics: boolean;
     note: string;
+  };
+  admin_auth: {
+    /** `open-loopback` is the default: no credential, this machine only. */
+    mode: "token" | "open-loopback";
+    token_configured: boolean;
+    token_rotated_at: string | null;
+    /** The same three moves from the command line, spelled with this state directory. */
+    commands: { require: string; rotate: string; stop_requiring: string };
   };
   database_options: DatabaseOption[];
   maintenance_actions: MaintenanceAction[];

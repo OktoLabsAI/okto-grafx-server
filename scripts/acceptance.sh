@@ -36,11 +36,14 @@ say "oktografx-server init"
 INIT_OUTPUT="$("$PYTHON" -m okto_grafx_server.cli --state-dir "$STATE_DIR" init \
   --root "$GRAPHS_DIR" --port "$PORT")"
 echo "$INIT_OUTPUT" | sed -n '1,8p'
-ADMIN_TOKEN="$(printf '%s\n' "$INIT_OUTPUT" | awk '/ADMIN TOKEN/{getline; gsub(/^[ \t]+/,""); print; exit}')"
-if [ -z "$ADMIN_TOKEN" ]; then
-  echo "could not read the admin token from init output" >&2
+# The gate exercises the default posture: init creates the state directory and mints no credential, so
+# every stage below — API, browser, README — runs the way a first-time operator's server runs. A token
+# round-trip is checked inside the flow, and ends by opening the door again.
+if printf '%s\n' "$INIT_OUTPUT" | grep -q "ADMIN TOKEN"; then
+  echo "init minted an administrator token; this run should be testing the open default" >&2
   exit 2
 fi
+ADMIN_TOKEN=""
 
 # The acceptance flow checks the metrics surface, so turn it on the way an operator would: the
 # starter configuration ships `metrics_enabled = false` because the exposition has no auth of its own.
@@ -119,7 +122,17 @@ fi
 
 if [ "${WITH_README:-1}" = "1" ]; then
   say "the README's curl examples, run verbatim"
-  "$ROOT/scripts/readme-check.sh" "http://127.0.0.1:$PORT" "$ADMIN_TOKEN" docs || status=$?
+  # The README's first control-plane example trades a token for a cookie, so this stage is run against a
+  # server that requires one; the door is opened again straight after, for anything that follows.
+  README_TOKEN="$("$PYTHON" -m okto_grafx_server.cli --state-dir "$STATE_DIR" admin-token rotate \
+    | tr -d '[:space:]' | grep -o 'okga_[A-Za-z0-9_-]*' | head -1)"
+  if [ -z "$README_TOKEN" ]; then
+    echo "could not mint a token for the README flow" >&2
+    status=1
+  else
+    "$ROOT/scripts/readme-check.sh" "http://127.0.0.1:$PORT" "$README_TOKEN" docs || status=$?
+    "$PYTHON" -m okto_grafx_server.cli --state-dir "$STATE_DIR" admin-token clear >/dev/null
+  fi
 else
   say "README example check skipped (WITH_README=0)"
 fi
@@ -176,7 +189,7 @@ curl -sS -b "$WORK_DIR/cookies.txt" "http://127.0.0.1:$PORT/admin/api/status" | 
 if [ "$KEEP" = "1" ]; then
   trap - EXIT
   echo
-  echo "kept: $WORK_DIR (admin token: $ADMIN_TOKEN)"
+  echo "kept: $WORK_DIR (no administrator token: this machine is the administrator)"
   echo "re-run the daemon with: $PYTHON -m okto_grafx_server.cli --state-dir $STATE_DIR run --port $PORT"
 fi
 

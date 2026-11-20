@@ -32,13 +32,13 @@ system Python is usually older than 3.11.
 
 `scripts/acceptance.sh` is the interesting one. It builds a fresh state directory, seeds three real
 stores, starts a daemon, runs 84 transport/API checks against two of them, drives the console in a real
-browser against the third (32 steps), and then runs **every `curl` example in README.md** against the live
+browser against the third (34 steps), and then runs **every `curl` example in README.md** against the live
 daemon. Documentation drift fails the build on purpose.
 
 `scripts/test-installer.sh` drives `install.sh` and `uninstall.sh` the way an operator would: install,
-`init`, start, log in with the token file, create a store with the *installed* environment, attach it,
-query it through the data plane, get a write refused with a read-only key, uninstall, and check that the
-state directory survived. Point it at the tree with `OKGIT_SOURCE="--from-tree $PWD"`, or leave
+`init`, start, read the store list **with no credential** (the default posture), require a token and watch
+that door close, create a store with the *installed* environment, attach it, query it through the data
+plane, get a write refused with a read-only key, uninstall, and check that the state directory survived. Point it at the tree with `OKGIT_SOURCE="--from-tree $PWD"`, or leave
 `OKGIT_SOURCE` empty to install the published release and verify its checksum. CI runs it from the tree on
 Ubuntu (`--installer pip`) and macOS (`--installer uv`); the release workflow runs it against the artifacts
 that tag just published.
@@ -121,8 +121,9 @@ treated as a product surface with its own harness rather than as a convenience s
 * `--dry-run` prints commands and **touches no files at all**. Anything new in the script has to be behind
   the `run`/`remove` wrappers or inside a `[ "$DRY" != "1" ]` branch, and the harness asserts the
   directories stay absent.
-* **Never `init` over an existing state directory.** A second `init` mints a new administrator token and
-  invalidates the one the operator is using; the script stops and points at `admin-token rotate` instead.
+* **Never `init` over an existing state directory.** A second `init` with `--with-admin-token` would mint
+  a token over the one the operator is holding; the script stops and points at `admin-token rotate`
+  instead. (Without that flag `init` mints nothing at all — the default posture has no credential.)
 * Resolve `--root` with `cd "$dir" && pwd -P` *after* creating it: the daemon refuses a store path with a
   symlinked component, and on macOS `/tmp` is one, so an unresolved root would turn every later `db add`
   into a confusing refusal. The harness keeps its sandbox under `$TMPDIR` for the same reason.

@@ -1,10 +1,12 @@
 """``oktografx-server`` — init, run, and the out-of-band credential doors.
 
-``init`` prints the bootstrap admin token **once** and stores only its digest; if that output is
-lost, ``admin-token rotate`` mints another (which revokes the old one). Commands that touch the
-control database run while the daemon is stopped: they open the same SQLite file, which is fine
-because it is WAL and single-writer, but the daemon owns the stores, so ``db add`` here never opens
-one — that happens on first use by the running server.
+By default an administrator needs no credential at all, and the administrator surface is reachable
+only from the machine the server runs on. ``admin-token rotate`` turns a token into a requirement
+(printed **once**, since only its digest is stored) and ``admin-token clear`` turns it back off; if
+the printed value is lost, rotating is the only way back. Commands that touch the control database
+run while the daemon is stopped: they open the same SQLite file, which is fine because it is WAL and
+single-writer, but the daemon owns the stores, so ``db add`` here never opens one — that happens on
+first use by the running server.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from .config import (
     DEFAULT_BIND_PORT,
     ServerConfig,
     default_state_dir,
+    host_is_loopback,
     load_config,
     validate_store_options,
     write_default_config,
@@ -155,9 +158,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-level", default="INFO")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init = sub.add_parser("init", help="Create the state directory and the admin token.")
+    init = sub.add_parser("init", help="Create the state directory.")
     init.add_argument("--root", action="append", default=[], help="Allowed store root (repeatable).")
     init.add_argument("--port", type=int, default=DEFAULT_BIND_PORT)
+    init.add_argument(
+        "--with-admin-token",
+        action="store_true",
+        help="Require an administrator token from the first start. Without it the console is open "
+        "to this machine only, which is the default.",
+    )
 
     run = sub.add_parser("run", help="Run the daemon in the foreground.")
     run.add_argument("--host", default=None)
@@ -207,9 +216,15 @@ def build_parser() -> argparse.ArgumentParser:
     revoke = key_sub.add_parser("revoke", help="Revoke a key by id.")
     revoke.add_argument("key_id", type=int)
 
-    token = sub.add_parser("admin-token", help="Rotate the administrator bootstrap token.")
+    token = sub.add_parser("admin-token", help="Turn the administrator token on, off, or read it.")
     token_sub = token.add_subparsers(dest="token_command", required=True)
-    token_sub.add_parser("rotate", help="Mint a new token and invalidate the old one.")
+    token_sub.add_parser(
+        "rotate", help="Require a token: mint a new one, invalidating the old one and its sessions."
+    )
+    token_sub.add_parser("status", help="Report whether a token is required.")
+    token_sub.add_parser(
+        "clear", help="Stop requiring a token: administrator access becomes this machine only."
+    )
 
     return parser
 
@@ -292,27 +307,40 @@ def _cmd_init(args: argparse.Namespace) -> int:
     config_path = write_default_config(state_dir / "server.toml", allowed_roots=roots, port=args.port)
     config = load_config(config_path)
     store = _open_store(config)
-    # Re-running init in a state directory that already has a token is an operator action with a
-    # consequence: the previous token stops working. Say so, because the old secret is usually the
-    # thing that got lost in the first place.
-    if store.admin_token_configured():
-        print(
-            f"note: {config.server_db_path} already has an administrator token; this mints a new "
-            "one and the old one stops working (`admin-token rotate` does the same on purpose).",
-            file=sys.stderr,
-        )
-    token = generate_admin_token()
-    store.set_admin_token(token)
+    token = None
+    if args.with_admin_token:
+        # Re-running init in a state directory that already has a token is an operator action with a
+        # consequence: the previous token stops working. Say so, because the old secret is usually
+        # the thing that got lost in the first place.
+        if store.admin_token_configured():
+            print(
+                f"note: {config.server_db_path} already has an administrator token; this mints a "
+                "new one and the old one stops working (`admin-token rotate` does the same on "
+                "purpose).",
+                file=sys.stderr,
+            )
+        token = generate_admin_token()
+        store.set_admin_token(token)
     store.close()
     print(f"state directory: {state_dir}")
     print(f"configuration:   {config_path}")
     print(f"control database:{config.server_db_path}")
     print(f"console:         http://{config.bind_host}:{config.bind_port}/")
-    print("\nADMIN TOKEN (shown once, store it now):")
-    print(f"  {token}")
-    print("\nSign in at the console, or call:")
-    print(f"  curl -X POST http://{config.bind_host}:{config.bind_port}/admin/api/login \\")
-    print(f"       -H 'content-type: application/json' -d '{{\"token\":\"{token}\"}}'")
+    if token:
+        print("\nADMIN TOKEN (shown once, store it now):")
+        print(f"  {token}")
+        print("\nSign in at the console, or call:")
+        print(f"  curl -X POST http://{config.bind_host}:{config.bind_port}/admin/api/login \\")
+        print(f"       -H 'content-type: application/json' -d '{{\"token\":\"{token}\"}}'")
+    else:
+        print(
+            "\nadministrator:   no token required — the console answers this machine only, and "
+            "anything\n                 arriving from somewhere else is refused."
+        )
+        print(
+            f"                 require one later: oktografx-server --state-dir {state_dir} "
+            "admin-token rotate"
+        )
     print(f"\nEdit {config_path} to set allowed_roots, then run:")
     print("  oktografx-server run")
     return 0
@@ -324,14 +352,27 @@ def _cmd_run(args: argparse.Namespace) -> int:
     config = _config(args)
     _configure_logging(args.log_level, config.log_path)
     store = _open_store(config)
-    if not store.admin_token_configured():
-        token = generate_admin_token()
-        store.set_admin_token(token)
-        print(
-            "No admin token was configured; a new one was created and is shown once:\n  " + token,
-            file=sys.stderr,
-        )
-    store.close()
+    try:
+        token_configured = store.admin_token_configured()
+    finally:
+        store.close()
+    # The daemon used to mint an administrator token right here when the state directory had none. It
+    # closed — silently, with the key on a stderr nobody reads — the door an operator had chosen to
+    # leave open. Whether a credential is required is settled per request, from the control database
+    # and the bind address; starting the daemon only says which of those it found.
+    if not token_configured:
+        if host_is_loopback(config.bind_host):
+            print(
+                "administrator:   no token required — this machine only "
+                f"(http://{config.bind_host}:{config.bind_port}/)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"administrator:   bound to {config.bind_host!r}, which is not loopback, so every "
+                "request is refused until `admin-token rotate` mints a token",
+                file=sys.stderr,
+            )
     print(
         f"okto-grafx-server {__version__} listening on http://{config.bind_host}:{config.bind_port} "
         f"(state: {config.state_dir})",
@@ -440,10 +481,38 @@ def _cmd_admin_token(args: argparse.Namespace) -> int:
     config = _config(args)
     store = _open_store(config)
     try:
+        if args.token_command == "status":
+            if store.admin_token_configured():
+                print(
+                    "administrator:   a token is required "
+                    f"(rotated {store.admin_token_rotated_at()})"
+                )
+                print("                 stop requiring it: oktografx-server admin-token clear")
+            else:
+                print(
+                    "administrator:   no token required — this machine only (loopback)\n"
+                    "                 require one: oktografx-server admin-token rotate"
+                )
+            return 0
+        if args.token_command == "clear":
+            if not store.admin_token_configured():
+                print("No administrator token is configured, so nothing is being required.")
+                return 0
+            store.clear_admin_token()
+            print(
+                "Administrator access no longer requires a token: the console answers this machine "
+                "only. Browsers already signed in stay signed in, and API keys are unaffected."
+            )
+            return 0
         token = generate_admin_token()
         store.set_admin_token(token)
-        store.prune_sessions()
-        print("A new admin token was created; the previous token and all sessions are invalid:")
+        # Rotating promises that the old credential and every browser holding it stop working. A
+        # session that outlives the token that produced it would make "stop working" a lie.
+        store.revoke_all_sessions()
+        print(
+            "A new admin token was created; the previous token and every signed-in browser stop "
+            "working:"
+        )
         print(f"  {token}")
         return 0
     finally:

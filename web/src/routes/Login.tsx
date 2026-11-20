@@ -18,6 +18,7 @@ export function Login() {
       queryClient.setQueryData(["session"], {
         signed_in: result.signed_in,
         token_configured: true,
+        auth: "token",
       });
       queryClient.invalidateQueries({ queryKey: ["session"] });
       queryClient.invalidateQueries({ queryKey: ["status"] });
@@ -41,8 +42,9 @@ export function Login() {
           <img alt="" className="h-10 w-10" src="/okto-grafx-icon.svg" />
           <h1 className="mt-2 text-[17px] font-semibold tracking-tight">Okto Grafx</h1>
           <p className="mt-1 text-[12.5px] text-muted">
-            Sign in with the administrator token written by <code className="text-cell">oktografx-server init</code>.
-            The session is an httpOnly, SameSite=Strict cookie: the token is not kept in this page.
+            Sign in with the administrator token. One is only demanded if it was turned on — by
+            default there is no token, and the console answers this machine alone. The session is an
+            httpOnly, SameSite=Strict cookie: the token is not kept in this page.
           </p>
         </div>
         <label className="block">
@@ -51,7 +53,7 @@ export function Login() {
             autoFocus
             className="input font-mono"
             onChange={(event) => setToken(event.target.value.trim())}
-            placeholder="ogkadm_…"
+            placeholder="okga_…"
             type="password"
             value={token}
           />
@@ -64,7 +66,8 @@ export function Login() {
                     code: error.code,
                     message:
                       error.message +
-                      " — the token is the one printed by `oktografx-server init`, or written to the state directory. Rotate it from Settings if it is lost.",
+                      " — if it is lost, `oktografx-server admin-token rotate` mints another and " +
+                      "invalidates this one.",
                     retryable: false,
                     details: error.details,
                   })

@@ -1,23 +1,57 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Copy } from "lucide-react";
 import { admin, type DatabaseOption } from "@/api/client";
 import { GROUP_TITLES } from "@/components/ConfigForm";
 import { formatBytes } from "@/lib/format";
 import { Badge, ConfirmButton, ErrorBanner, JsonBlock, Section, Spinner } from "@/components/ui";
 
 export function Settings() {
+  const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings"], queryFn: admin.settings });
   const status = useQuery({ queryKey: ["status"], queryFn: admin.status, refetchInterval: 10_000 });
-  const [rotated, setRotated] = useState<string | null>(null);
+  const [issued, setIssued] = useState<string | null>(null);
 
+  const refreshAuth = () => {
+    queryClient.invalidateQueries({ queryKey: ["session"] });
+    queryClient.invalidateQueries({ queryKey: ["settings"] });
+  };
+
+  // Rotating kills every session built on the old value, this browser's included. The panel keeps
+  // the operator standing where they are by trading the fresh token for a fresh session in the same
+  // motion; every other browser is signed out, which is the promise the sentence makes.
   const rotate = useMutation({
-    mutationFn: admin.rotateAdminToken,
-    onSuccess: (result) => setRotated(result.admin_token),
+    mutationFn: async () => {
+      const result = await admin.rotateAdminToken();
+      await admin.login(result.admin_token);
+      return result;
+    },
+    onSuccess: (result) => {
+      setIssued(result.admin_token);
+      refreshAuth();
+    },
+  });
+
+  const requireToken = useMutation({
+    mutationFn: admin.mintAdminToken,
+    onSuccess: (result) => {
+      setIssued(result.admin_token);
+      refreshAuth();
+    },
+  });
+
+  const stopRequiring = useMutation({
+    mutationFn: admin.disableAdminToken,
+    onSuccess: () => {
+      setIssued(null);
+      refreshAuth();
+    },
   });
 
   if (settings.isLoading) return <Spinner label="loading settings…" />;
   if (settings.error) return <ErrorBanner error={settings.error} onRetry={() => settings.refetch()} />;
   const payload = settings.data!;
+  const auth = payload.admin_auth;
 
   return (
     <div className="space-y-3">
@@ -54,27 +88,80 @@ export function Settings() {
 
       <Section
         actions={
-          <ConfirmButton
-            confirmLabel="rotate token"
-            danger
-            detail="The current admin token stops working immediately, including this session. The new token is shown once."
-            label="rotate admin token"
-            onConfirm={() => rotate.mutate()}
-          />
+          auth.mode === "open-loopback" ? (
+            <ConfirmButton
+              confirmLabel="require a token"
+              detail="Any process on this machine can create API keys and register stores right now. Turning this on makes every administrator request prove the token — and this browser signs itself in with the value it is about to show you."
+              label="require a token"
+              onConfirm={() => requireToken.mutate()}
+            />
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <ConfirmButton
+                confirmLabel="rotate token"
+                danger
+                detail="The old token stops working and every other browser is signed out. This one stays in, with the new value shown once."
+                label="rotate admin token"
+                onConfirm={() => rotate.mutate()}
+              />
+              <ConfirmButton
+                confirmLabel="stop requiring it"
+                danger
+                detail="Administrator access becomes this machine only: any process that can reach 127.0.0.1 gets in. API keys, stores and sessions already open are untouched."
+                label="stop requiring a token"
+                onConfirm={() => stopRequiring.mutate()}
+              />
+            </div>
+          )
         }
         title="administrator"
       >
         {rotate.error ? <ErrorBanner error={rotate.error} /> : null}
-        {rotated ? (
+        {requireToken.error ? <ErrorBanner error={requireToken.error} /> : null}
+        {stopRequiring.error ? <ErrorBanner error={stopRequiring.error} /> : null}
+        {issued ? (
           <div className="rounded-md border border-[#e2b13c45] bg-[#1a1508] p-2.5">
-            <p className="text-[12px] text-warn">Store this now: it is shown once, and the old token is dead.</p>
-            <code className="mt-1 block overflow-auto rounded bg-deep px-2 py-1.5 font-mono text-[12.5px] text-warn">{rotated}</code>
+            <p className="text-[12px] text-warn">
+              Store this now: it is shown once, and the server keeps only a hash of it.
+            </p>
+            <code className="mt-1 block overflow-auto rounded bg-deep px-2 py-1.5 font-mono text-[12.5px] text-warn">
+              {issued}
+            </code>
+            <button
+              className="btn mt-2"
+              onClick={() => navigator.clipboard?.writeText(issued)}
+              type="button"
+            >
+              <Copy size={14} strokeWidth={2} aria-hidden />
+              copy token
+            </button>
           </div>
-        ) : (
-          <p className="text-[12px] text-muted">
-            The token is stored hashed in the control database. Rotating it does not touch API keys.
-          </p>
-        )}
+        ) : null}
+        <dl className="mt-2 space-y-1 text-[12.5px]">
+          <div className="flex items-center gap-2">
+            <dt className="eyebrow">access</dt>
+            <dd>
+              <Badge tone={auth.mode === "open-loopback" ? "warn" : "ok"}>
+                {auth.mode === "open-loopback" ? "no token — this machine only" : "token required"}
+              </Badge>
+            </dd>
+          </div>
+          {auth.token_rotated_at ? <Line label="token rotated" value={auth.token_rotated_at} /> : null}
+          <Line label="from elsewhere" value="refused — the server binds 127.0.0.1 and has no TLS" />
+          <Line
+            label="browser writes"
+            value="a page that is not this page may not change anything (origin checked)"
+          />
+          <Line
+            label="from the shell"
+            value={auth.mode === "open-loopback" ? auth.commands.require : auth.commands.stop_requiring}
+          />
+        </dl>
+        <p className="mt-2 text-[11.5px] text-muted">
+          {auth.mode === "open-loopback"
+            ? "A token is opt-in here. Until one exists the boundary is the machine: this machine in, everyone else out."
+            : "The token is stored hashed in the control database. Rotating it does not touch API keys."}
+        </p>
       </Section>
 
       <Section title="live handle table">
