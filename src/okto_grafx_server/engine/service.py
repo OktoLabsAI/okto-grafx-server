@@ -19,19 +19,17 @@ from okto_grafx import connect
 from okto_grafx.domain.vector.filter import RecordIdFilter
 from okto_grafx.domain.query.hybrid import HybridSearchOptions
 from okto_grafx.domain.query.control import CancellationToken
-from okto_grafx.engine.database import Database, Transaction
+from okto_grafx.engine.database import Database
 from okto_grafx.projections import ProjectionLimits, project_graph
 
-from ..config import describe_path, resolve_existing_store, resolve_store_parent
+from ..config import describe_path, resolve_existing_store
 from ..control.store import ControlStore, DatabaseRecord
 from ..errors import AppError, bad_request, conflict, forbidden, map_grafx_error, not_found
 from .handles import HandlePool
 from .values import (
-    EncodeWarnings,
     ValueCodec,
     decode_parameters,
     entity_id,
-    extract_entities,
 )
 
 log = logging.getLogger("okto_grafx_server.service")
@@ -250,7 +248,6 @@ class DatabaseService:
     def candidate_roots(self) -> list[dict[str, Any]]:
         """The declared roots and their immediate Grafx-looking children."""
 
-        import pathlib
 
         out: list[dict[str, Any]] = []
         for root in self.allowed_roots:

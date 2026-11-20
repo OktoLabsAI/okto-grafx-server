@@ -15,7 +15,6 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -372,7 +371,6 @@ def _render_metrics(context: ServerContext, *, openmetrics: bool = False) -> str
 def _mount_console(app: FastAPI) -> None:
     """Serve the built console, with an honest answer when it was never built."""
 
-    index = WEB_DIRECTORY / "index.html"
     assets = WEB_DIRECTORY / "assets"
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
@@ -384,13 +382,24 @@ def _mount_console(app: FastAPI) -> None:
 
 
 def _spa_response(request: Request, exc: StarletteHTTPException | None):  # type: ignore[no-untyped-def]
+    """An asset from the bundle, or the shell for any path the router did not claim.
+
+    A browser route is not a file, so most paths here end at `index.html`. The ones that *do* name a
+    file are checked against the console directory rather than trusted: a request carrying `..`
+    segments — raw or percent-encoded — gets the shell, never a file from outside the bundle.
+    """
+
     index = WEB_DIRECTORY / "index.html"
     path = request.url.path
-    if index.is_dir():  # pragma: no cover - defensive
-        index = index / "index.html"
     if index.exists():
-        candidate = WEB_DIRECTORY / path.lstrip("/")
-        if path != "/" and candidate.is_file():
+        root = WEB_DIRECTORY.resolve()
+        candidate = (WEB_DIRECTORY / path.lstrip("/")).resolve()
+        if (
+            path != "/"
+            and candidate.is_file()
+            and candidate != root
+            and candidate.is_relative_to(root)
+        ):
             return FileResponse(str(candidate))
         return FileResponse(str(index), media_type="text/html")
     return JSONResponse(

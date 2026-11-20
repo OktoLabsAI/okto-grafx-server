@@ -15,7 +15,7 @@ from ..engine.handles import HandlePool
 from ..engine.jobs import JobRunner
 from ..engine.runner import EngineRunner
 from ..engine.service import DatabaseService
-from ..errors import AppError, forbidden, not_found, unauthorized
+from ..errors import AppError, not_found, unauthorized
 
 SESSION_COOKIE = "okg_session"
 

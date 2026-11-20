@@ -384,8 +384,6 @@ def _cmd_db(args: argparse.Namespace) -> int:
             return 0
         if args.db_command == "add":
             from .engine.handles import HandlePool
-            from .engine.jobs import JobRunner
-            from .engine.runner import EngineRunner
             from .engine.service import DatabaseService
 
             pool = HandlePool(max_open_handles=config.max_open_handles,

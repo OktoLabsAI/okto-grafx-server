@@ -181,10 +181,7 @@ def test_a_shared_space_makes_the_caller_name_its_owner(daemon) -> None:
     error = body(ghost_owner)["error"]
     assert "Ghost" in error["message"] and error["field"] == "table"
 
-
-def owners_of(error: dict) -> list[str]:  # noqa: ANN201
-    return [item.split(":")[0] for item in error["details"]["owners"]]
-
+    # And naming an owner that exists answers the question instead of guessing between two tables.
     resolved = daemon.client.post(
         "/api/v1/databases/docs/search/vector",
         json={"space": "semantic", "vector": [1.0, 0.0], "k": 3, "table": "Doc"},
@@ -192,6 +189,10 @@ def owners_of(error: dict) -> list[str]:  # noqa: ANN201
     )
     assert resolved.status_code == 200, resolved.text
     assert {hit["table"] for hit in body(resolved)["hits"]} == {"Doc"}
+
+
+def owners_of(error: dict) -> list[str]:  # noqa: ANN201
+    return [item.split(":")[0] for item in error["details"]["owners"]]
 
 
 # -- hybrid ----------------------------------------------------------------------------

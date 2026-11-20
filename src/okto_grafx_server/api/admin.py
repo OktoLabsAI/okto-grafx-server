@@ -30,7 +30,6 @@ from ..errors import AppError, bad_request
 from .. import __version__
 from .context import (
     SESSION_COOKIE,
-    ServerContext,
     admin_session_id,
     context_of,
     require_admin,

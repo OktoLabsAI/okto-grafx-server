@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from ..errors import AppError
 from ..engine.service import QueryOutcome
 from .context import (
-    Principal,
     ServerContext,
     authenticate_principal,
     context_of,
@@ -118,8 +117,9 @@ def list_databases(request: Request, principal=Depends(authenticate_principal)) 
     ctx = context_of(request)
     out = []
     for slug in sorted(principal.databases):
-        record = ctx.service.record(slug)
-        status = ctx.store.get_database(slug)
+        # One lookup, and it is the guarded one: a registration that was disabled is refused here
+        # rather than listed as if it were queryable.
+        status = ctx.service.record(slug)
         out.append(
             {
                 "slug": status.slug,

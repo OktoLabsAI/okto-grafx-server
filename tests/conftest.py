@@ -10,7 +10,6 @@ temporary tree behind ``/var -> /private/var``.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Iterable
 

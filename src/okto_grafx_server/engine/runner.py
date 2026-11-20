@@ -14,7 +14,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Callable, TypeVar
 
 from ..errors import AppError, too_many
 

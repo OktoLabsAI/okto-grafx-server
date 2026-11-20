@@ -348,7 +348,7 @@ class ControlStore:
             )
         if self.get_database_by_path(path) is not None:
             raise conflict(
-                f"That directory is already registered under another id.",
+                "That directory is already registered under another id.",
                 code="database_path_taken",
                 details={"path": path},
             )

@@ -6,7 +6,7 @@ import json
 import threading
 import time
 
-from conftest import Harness, seed_store
+from conftest import Harness
 
 
 def body(response):  # noqa: ANN001
