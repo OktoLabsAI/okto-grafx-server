@@ -195,24 +195,15 @@ function Get-OwnerSid {
 }
 
 function Set-OwnerOnlyAcl {
-    # Mirrors the recipe in install.ps1 - protect from the parent, purge every other identity, grant this
-    # account. It is repeated here because the harness also writes a token file by hand (the operator who
-    # saved the value the installer printed), and a promise about that file has to be made the way the
-    # installer makes it, not with a chmod that NTFS ignores.
+    # The same SDDL line install.ps1 writes, applied to the token file the harness saves by hand (the
+    # operator who kept the printed value). The same notation rather than an equivalent-looking call,
+    # because a promise tested through a different mechanism is not the promise being tested.
     param([string] $Path)
     $sid = Get-OwnerSid
-    $acl = Get-Acl -LiteralPath $Path
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($explicit in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
-        if ($explicit.IdentityReference.Value -ne $sid.Value) { $acl.PurgeAccessRules($explicit.IdentityReference) }
-    }
-    $acl.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
-        $sid,
-        [System.Security.AccessControl.FileSystemRights]::FullControl,
-        [System.Security.AccessControl.InheritanceFlags]::None,
-        [System.Security.AccessControl.PropagationFlags]::None,
-        [System.Security.AccessControl.AccessControlType]::Allow))
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    $acl = [System.Security.AccessControl.FileSecurity]::new(
+        "D:P(A;;FA;;;$($sid.Value))",
+        [System.Security.AccessControl.AccessControlSections]::Access)
+    [System.IO.File]::SetAccessControl($Path, $acl)
 }
 
 function Assert-OwnerOnlyAcl {

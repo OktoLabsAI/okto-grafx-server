@@ -578,48 +578,38 @@ try {
                     if (-not $NoTokenFile) {
                         Set-Content -LiteralPath $TokenPath -Value $Token -Encoding ascii
                         # The POSIX installer creates this file under umask 177. NTFS has no umask, so the
-                        # equivalent of "owner only" is an access list holding one entry, for this account,
-                        # with nothing inherited from the folder above. That is built here through the ACL
-                        # object rather than icacls: the command line answers in prose, and "1 file
-                        # processed" says nothing about which entries the file ends up carrying - while
-                        # this script's promise is about exactly those entries. So they are set, read back,
-                        # and checked. If it fails the file still sits in a profile folder this account
-                        # owns, but the promise would be false, so the script says so rather than being
-                        # quiet about it.
+                        # equivalent of "owner only" is an access list holding exactly one entry - this
+                        # account, nothing inherited from the folder above. It is written as SDDL,
+                        # D:P(A;;FA;;;<sid>), because that notation means the same thing in every
+                        # PowerShell. Assembling the list rule by rule read better, worked in the shell it
+                        # was written against, and left the file inheriting its folder in the one that
+                        # actually runs this script: the in-box Windows PowerShell 5.1. So the entries are
+                        # stated and then read back, and when they cannot be had the reason is said out
+                        # loud - a security promise that fails quietly is worse than no promise.
                         $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-                        $locked = $false
+                        $why = ''
                         try {
-                            $acl = Get-Acl -LiteralPath $TokenPath
-                            # Protected, and not preserving what came from the parent: a token file must
-                            # not become readable next month because somebody relaxed its folder.
-                            $acl.SetAccessRuleProtection($true, $false)
-                            # Whatever the profile folder granted - Users, Authenticated Users, an
-                            # Administrators group this account happens to be in - comes out, because the
-                            # claim being made is "this account alone", not "this account plus whoever the
-                            # parent felt like including".
-                            foreach ($explicit in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
-                                if ($explicit.IdentityReference.Value -ne $sid.Value) {
-                                    $acl.PurgeAccessRules($explicit.IdentityReference)
+                            $acl = [System.Security.AccessControl.FileSecurity]::new(
+                                "D:P(A;;FA;;;$($sid.Value))",
+                                [System.Security.AccessControl.AccessControlSections]::Access)
+                            [System.IO.File]::SetAccessControl($TokenPath, $acl)
+                            $written = [System.IO.File]::GetAccessControl($TokenPath)
+                            if (-not $written.AreAccessRulesProtected) {
+                                $why = 'the file still inherits its folder'
+                            } else {
+                                $strangers = @($written.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
+                                    Where-Object { ($_.AccessControlType -eq 'Allow') -and ($_.IdentityReference.Value -ne $sid.Value) })
+                                if ($strangers.Count -gt 0) {
+                                    $why = 'the file still grants access to ' + (($strangers | ForEach-Object { $_.IdentityReference.Value }) -join ', ')
                                 }
                             }
-                            $acl.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
-                                $sid,
-                                [System.Security.AccessControl.FileSystemRights]::FullControl,
-                                [System.Security.AccessControl.InheritanceFlags]::None,
-                                [System.Security.AccessControl.PropagationFlags]::None,
-                                [System.Security.AccessControl.AccessControlType]::Allow))
-                            Set-Acl -LiteralPath $TokenPath -AclObject $acl
-                            $written = Get-Acl -LiteralPath $TokenPath
-                            $strangers = @($written.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
-                                Where-Object { ($_.AccessControlType -eq 'Allow') -and ($_.IdentityReference.Value -ne $sid.Value) })
-                            $locked = ($written.AreAccessRulesProtected -and $strangers.Count -eq 0)
                         } catch {
-                            $locked = $false
+                            $why = $_.Exception.Message
                         }
-                        if ($locked) {
-                            Say "token file    $TokenPath (one entry: this account. nothing inherited)"
+                        if ($why) {
+                            Say "token file    $TokenPath - WARNING: could not be set to this account alone ($why); it keeps the folder's inherited permissions"
                         } else {
-                            Say "token file    $TokenPath - WARNING: the access list could not be set to this account alone; the file keeps the folder's inherited permissions"
+                            Say "token file    $TokenPath (one entry: this account. nothing inherited)"
                         }
                     }
                 } else {
