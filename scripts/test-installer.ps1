@@ -680,9 +680,16 @@ db.close()
     # watched happening rather than assumed from the POSIX script.
     $TokenState = Join-Path $Sandbox 'token-state'
     $TokenPrefix = Join-Path $Sandbox 'token-prefix'
+    # $SourceArgs like every other invocation here: this step is about the credential the installer
+    # creates, not about where the package came from, and the two are separate concerns. It matters right
+    # now: the published v0.2.0 cannot init on Windows at all (allowed_roots was written with unescaped
+    # backslashes, so the starter server.toml is not valid TOML), and that fix lives on this branch. A
+    # step that installs the release instead of the tree would spend its whole life failing for a bug this
+    # branch already fixed. Downloading and verifying a published asset is release.yml's job, where the
+    # assets under test are the ones built from the tag.
     $withToken = Invoke-PsScript -File $Install -Arguments @(
         '-Prefix', $TokenPrefix, '-StateDir', $TokenState, '-Root', $Root, '-Port', $Port,
-        '-Installer', $Installer, '-Python', $Python, '-WithAdminToken', '-NoRun')
+        '-Installer', $Installer, '-Python', $Python, '-WithAdminToken', '-NoRun') + $SourceArgs
     if (-not $withToken) { Die 'install.ps1 -WithAdminToken exited non-zero' }
     Expect-Literal 'token         okga_'
     $Minted = ([regex]::Match((Get-Content -LiteralPath $Log -Raw), 'okga_[A-Za-z0-9_-]{16,}')).Value
