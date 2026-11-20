@@ -165,6 +165,29 @@ function Invoke-NativeLogged {
     return $result
 }
 
+function Test-PythonAtLeast {
+    # Ask the interpreter for its version and read the number, rather than running a `-c` snippet. A
+    # one-liner there means semicolons, parentheses and a `>=` through PowerShell's native argument
+    # quoting, and the failure is a SyntaxError from a file that does not exist: python.exe line 1, with
+    # the source echoed back and no way to tell what it was actually given. `--version` needs no quotes,
+    # and Python 2 prints to stderr, which Invoke-Native has already merged.
+    param(
+        [string] $File,
+        [string[]] $Prefix = @(),
+        [int] $Major = 3,
+        [int] $Minor = 11
+    )
+    $result = Invoke-Native $File ($Prefix + @('--version'))
+    $text = ($result.Lines -join ' ')
+    $match = [regex]::Match($text, 'Python (\d+)\.(\d+)')
+    if (-not $match.Success) {
+        return [pscustomobject]@{ Ok = $false, Version = ''; Detail = "no version in: $text" }
+    }
+    $seen = [pscustomobject]@{ Major = [int] $match.Groups[1].Value; Minor = [int] $match.Groups[2].Value }
+    $ok = ($seen.Major -gt $Major) -or (($seen.Major -eq $Major) -and ($seen.Minor -ge $Minor))
+    return [pscustomobject]@{ Ok = $ok; Version = "$($seen.Major).$($seen.Minor)"; Detail = "Python $seen" }
+}
+
 function Get-Exe {
     param([string] $Name)
     $found = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -271,7 +294,6 @@ if ($UsingUv) {
         # candidate whose path mentions WindowsApps is dropped below rather than believed.
         $candidates = @('py', 'python3.13', 'python3.12', 'python3.11', 'python3', 'python')
     }
-    $versionCheck = 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'
     $tried = @()
     foreach ($candidate in $candidates) {
         # Resolve through PATH first even when -Python named the interpreter itself: "-Python python" is
@@ -289,15 +311,16 @@ if ($UsingUv) {
         # arguments directly, and that prefix has to travel with the path all the way to venv creation.
         $prefix = @()
         if ((Split-Path -Leaf $resolved) -ieq 'py.exe') { $prefix = @('-3') }
-        $probe = Invoke-Native $resolved ($prefix + @('-c', $versionCheck))
-        if ($probe.Code -eq 0) { $PythonBin = $resolved; $PythonArgs = $prefix; break }
-        $tried += "$resolved (exited $($probe.Code): $((($probe.Lines | Select-Object -First 2)) -join ' '))"
+        $probe = Test-PythonAtLeast -File $resolved -Prefix $prefix
+        if ($probe.Ok) { $PythonBin = $resolved; $PythonArgs = $prefix; break }
+        $tried += "$resolved ($($probe.Detail))"
     }
     if (-not $PythonBin) {
         foreach ($attempt in $tried) { Say "tried         $attempt" }
         Stop-WithError 'no Python >= 3.11 found. Install one (https://www.python.org/downloads/windows/), or install uv (https://docs.astral.sh/uv/) and run this again.'
     }
     $pyVersion = (Invoke-Native $PythonBin ($PythonArgs + @('--version'))).Lines -join ' '
+    if (-not $pyVersion) { $pyVersion = "python at $PythonBin" }
     Say "installer     venv + pip ($pyVersion)"
 }
 
