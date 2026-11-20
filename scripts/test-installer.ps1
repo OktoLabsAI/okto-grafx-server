@@ -102,7 +102,10 @@ function Invoke-PsScript {
 function Expect-Literal {
     param([string] $Needle)
     $text = if (Test-Path -LiteralPath $Log) { Get-Content -LiteralPath $Log -Raw } else { '' }
-    if ($text -notlike "*$Needle*") { Die "the installer output does not contain '$Needle'" }
+    # String.Contains rather than -like: the needles include `[dry-run]`, and to -like that is a wildcard
+    # character class - an invalid one, so the check dies with "The specified wildcard character pattern
+    # is not valid" while the installer it is checking did exactly the right thing.
+    if (-not $text.Contains($Needle)) { Die "the installer output does not contain '$Needle'" }
 }
 
 function Invoke-Curl {
