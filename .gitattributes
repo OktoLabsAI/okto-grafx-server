@@ -1,0 +1,13 @@
+# Line endings here are part of behaviour, not taste.
+
+# bash refuses a CRLF script, so the POSIX installer ships with LF whatever machine checked it out.
+*.sh text eol=lf
+*.bash text eol=lf
+
+# cmd.exe parses labels and `goto` in a batch file differently depending on the build when the file is
+# LF-only, and a raw-downloaded file is what the operator actually runs. So the bytes in the repository
+# are the bytes that ship: `-text` turns off per-platform translation, and the files are committed with
+# CRLF. `-text` also keeps the release workflow's byte-for-byte comparison of tag versus tree honest —
+# an autocrlf checkout would differ from what raw.githubusercontent serves.
+*.cmd -text
+*.ps1 -text

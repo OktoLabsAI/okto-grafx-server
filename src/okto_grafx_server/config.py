@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import sys
 import tomllib
 from dataclasses import MISSING, dataclass, field, fields as dataclass_fields
 from pathlib import Path
@@ -55,12 +56,26 @@ class PathPolicyError(AppError):
 
 
 def default_state_dir() -> Path:
+    """Where ``server.toml`` and ``server.db`` go when the operator did not say.
+
+    ``OKTO_GRAFX_SERVER_STATE`` wins on every platform, and ``XDG_STATE_HOME`` is honoured on every
+    platform too — including Windows — so a test, a container or a portable install can pin the
+    directory without knowing which OS it is running on. What is left is the platform's own habit: a
+    dot-directory under the home on POSIX, and the per-user application data directory on Windows,
+    because someone looking for this folder in Explorer opens ``%LOCALAPPDATA%`` and reads the product
+    name, rather than walking into a ``.local`` they never created. The installer reads this function's
+    answer rather than carrying a second copy of it, so there is one rule for where state lives.
+    """
     override = os.environ.get("OKTO_GRAFX_SERVER_STATE")
     if override:
         return Path(override).expanduser().resolve()
     base = os.environ.get("XDG_STATE_HOME")
     if base:
         return Path(base).expanduser() / "okto-grafx-server"
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data).expanduser() / "okto-grafx-server"
     return Path.home() / ".local" / "state" / "okto-grafx-server"
 
 
