@@ -117,6 +117,9 @@ statistics, on a stated snapshot — including when that answer is a refusal.
   store's writer lease.
 * **`curl`** and a POSIX shell, for the one-command installer. It works on the bash macOS ships (3.2),
   which is what `curl … | bash` runs there.
+* **Windows**: `curl.exe` (in the box since Windows 10 1809) and **PowerShell 5.1**, the one that ships
+  with Windows. The installer is written for 5.1 and not only for PowerShell 7, because the machine
+  running the one-liner is a machine where nothing has been installed yet.
 
 ## Install
 
@@ -207,6 +210,74 @@ that. `--purge-state` removes the control plane deliberately, and still never de
 The package is not on PyPI yet, so `pip install okto-grafx-server` does not work today; this release and
 the source below are the two ways in.
 
+### On Windows
+
+The same installer, in the PowerShell spelling:
+
+```powershell
+curl.exe -fsSL -o install.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+From a cmd prompt there is `install.cmd`, a front-end onto that script rather than a second installer: it
+finds `powershell.exe`, fetches the `.ps1` next to itself if you downloaded only one file, and hands the
+arguments over. Two entry points, one implementation, because two installers drift and the operator pays
+for the drift with a flag that means something slightly different on the other side:
+
+```bat
+curl.exe -fsSL -o install.cmd https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/install.cmd
+install.cmd -Port 8899
+```
+
+Same promises, Windows paths. The wheel is checked against this release's `SHA256SUMS` with
+`Get-FileHash`; the command lands in `<prefix>\bin` (`uv tool install` when `uv` is present, otherwise a
+venv beside it with a two-line `.cmd` shim, since a symlink would need developer mode); state goes to
+`%LOCALAPPDATA%\okto-grafx-server`, which is also the default the server itself picks; the daemon starts
+as a hidden detached process and its pid goes to `daemon.pid`.
+
+| switch | default | what it decides |
+| --- | --- | --- |
+| `-Prefix DIR` | `%LOCALAPPDATA%\Programs\okto-grafx-server` | the command, and the venv beside it |
+| `-StateDir DIR` | `%LOCALAPPDATA%\okto-grafx-server` | `server.toml`, `server.db`, the token file |
+| `-Root DIR` | `%USERPROFILE%\graphs` | the only directory `db add` may read stores from |
+| `-Port N` | `8737` | loopback port |
+| `-Installer auto\|uv\|pip`, `-Python EXE` | `auto`, first 3.11+ | which installer, which interpreter |
+| `-Wheel FILE`, `-FromTree DIR` | — | install a local artifact instead of the release |
+| `-WithAdminToken`, `-NoTokenFile` | off | require a token: mints one, prints it once, keeps a copy |
+| `-NoInit`, `-NoRun`, `-DryRun` | off | as above; `-DryRun` writes nothing, including on the uv path |
+| `-AddToPath` | off | append `<prefix>\bin` to your *user* PATH; without it the installer prints a note |
+
+To take it back out:
+
+```powershell
+curl.exe -fsSL -o uninstall.ps1 https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.2.0/uninstall.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
+```
+
+It removes the command and its environment, stops the daemon whose pid is in that state directory, and
+leaves `server.toml`, `server.db`, the audit trail and the token where they are — `-PurgeState` removes the
+control plane on purpose and still never deletes a store. `-RemoveFromPath` takes `<prefix>\bin` out of
+your user PATH; without it the uninstaller prints the line that does, because editing your PATH is not a
+call a script should make quietly.
+
+Three differences are worth knowing before you rely on them, and the installer says each one out loud at
+the moment it matters:
+
+* **The daemon is a hidden process, not a service.** No supervisor, nothing relaunched after a crash,
+  nothing that comes back after a reboot. Stop it with `Stop-Process -Id (Get-Content $state\daemon.pid)`;
+  [Running as a service](#running-as-a-service) has the Task Scheduler version if you want it started at
+  logon.
+* **There is no umask on NTFS.** The token file's `0600` becomes an access list with inherited entries
+  dropped and one grant (`icacls`). If that call fails the script says the promise did not hold, instead
+  of printing that the file is protected.
+* **`python3` can be a lie.** On a stock Windows 10/11 it is often the Store execution alias, so a
+  candidate whose path says `WindowsApps` is skipped, and `py` carries its `-3` through to the venv.
+
+The Windows path is exercised by `scripts/test-installer.ps1` on a `windows-latest` runner — the same
+checks the POSIX driver runs, driving the in-box PowerShell 5.1 — from the working tree on every push and
+against the published artifacts of a tag. What nobody has run yet is your machine, so when something
+misbehaves the first thing to read is the log the summary names.
+
 ### From this repository
 
 ```bash
@@ -214,6 +285,15 @@ git clone https://github.com/OktoLabsAI/okto-grafx-server.git
 cd okto-grafx-server
 python3.11 -m venv .venv
 .venv/bin/pip install -e .                  # the daemon: oktografx-server
+```
+
+The same on Windows, with the launcher in front of everything:
+
+```powershell
+git clone https://github.com/OktoLabsAI/okto-grafx-server.git
+cd okto-grafx-server
+py -3.11 -m venv .venv
+.venv\Scripts\pip install -e .               # the daemon: .venv\Scripts\oktografx-server.exe
 ```
 
 With uv, which is what the maintainers use (note: a uv venv has no `pip` inside it):
@@ -1018,6 +1098,23 @@ ReadWritePaths=/var/lib/okto-grafx-server /srv/grafx
 WantedBy=multi-user.target
 ```
 
+Task Scheduler, for the machine that is also somebody's desktop (an ordinary prompt; it starts at logon,
+under the account that owns the state directory):
+
+```bat
+schtasks /Create /TN okto-grafx-server /SC ONLOGON /RL LIMITED ^
+  /TR "\"%LOCALAPPDATA%\Programs\okto-grafx-server\bin\oktografx-server.exe\" --state-dir \"%LOCALAPPDATA%\okto-grafx-server\" run"
+```
+
+Two things about that one do not apply to the templates above. Ending the task - `schtasks /End`, or a
+logoff - *terminates* the process instead of signalling it, so the daemon does not get its drain: the
+engine recovers from an unclean shutdown, but a store left with an un-checkpointed WAL is refused by a
+read-only client open, so close the store (or stop the daemon with `Ctrl+C` in a terminal) before ending
+the task if a client is going to read it afterwards. And `schtasks` quotes `/TR` in ways that surprise, so
+`schtasks /Query /TN okto-grafx-server /V /FO LIST` is how you check what was actually stored. With uv the
+command is `oktografx-server.exe`; without it the installer leaves `oktografx-server.cmd`, and either runs
+as a task.
+
 There is no TLS here on purpose. If something other than this machine must reach the console, put a proxy
 in front, keep the daemon on loopback, and forward to it:
 
@@ -1095,8 +1192,8 @@ loaded from elsewhere simply would not render.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q              # 257 tests: unit, contract, live-engine, transport, CLI
-(cd web && npx vitest run && npx tsc --noEmit && npm run build)   # 74 console tests
+.venv/bin/python -m pytest tests -q              # 272 tests: unit, contract, live-engine, transport, CLI
+(cd web && npx vitest run && npx tsc --noEmit && npm run build)   # 77 console tests
 ./scripts/acceptance.sh                          # the whole gate, below
 ```
 
@@ -1108,7 +1205,7 @@ two-process case (the CLI reading a store the daemon is serving).
 `scripts/acceptance.sh` is the end-to-end gate: it seeds three stores, runs `init`, flips
 `metrics_enabled`, starts a real daemon, then runs `scripts/acceptance.py` against two of them (84 checks
 each: REST, WS writes with rollback, MCP scoping, OpenAPI, metrics, SPA, audit), drives the console in a
-real browser against the third (32 steps: login, attach by reference, the checkpoint-complete remedy,
+real browser against the third (34 steps: the console opens without a sign-in screen, attach by reference, the checkpoint-complete remedy,
 maintenance jobs, query, WebGL graph, three search regimes, key issuance, a refused write over HTTP and
 over the socket, jobs, audit, settings), and finally runs every `curl` example in this file against the
 live daemon (`scripts/readme-check.sh`, 25 examples, mints and revokes its own key), so the documentation
@@ -1125,6 +1222,7 @@ WITH_README=0 ./scripts/acceptance.sh        # skip the documentation examples
   --admin-token okga_… --store /abs/path/to/graphs/newstore --shots /tmp/shots)
 ./scripts/readme-check.sh http://127.0.0.1:8737 okga_… docs   # just the README
 OKGIT_SOURCE="--from-tree $PWD" ./scripts/test-installer.sh       # the installer, end to end, in a sandbox
+OKGIT_SOURCE="-FromTree $PWD" ./scripts/test-installer.ps1        # the same, for install.ps1 (Windows only)
 ```
 
 `scripts/test-installer.sh` drives `install.sh` and `uninstall.sh` the way an operator would — install,

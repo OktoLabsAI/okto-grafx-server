@@ -137,6 +137,39 @@ treated as a product surface with its own harness rather than as a convenience s
   writes `SHA256SUMS`, publishes a GitHub Release with both installer scripts, and then installs that
   release on Ubuntu (pip) and macOS (uv) with the same harness.
 
+The Windows installers (`install.ps1`, `uninstall.ps1`) hold the same contract in the other shell, and
+`install.cmd` / `uninstall.cmd` are front-ends onto the `.ps1` — they find `powershell.exe` and hand the
+arguments over. Nothing else may live in them: two implementations of one install drift, and the operator
+pays with a switch that means something slightly different on the other side.
+
+* They target **Windows PowerShell 5.1**, the one that ships with Windows, because the machine running the
+  one-liner is a machine where nothing has been installed yet. No `??`, no ternary, no
+  `Invoke-WebRequest` conveniences that only exist in PowerShell 7 — and `-UseBasicParsing` everywhere. The
+  CI job drives the in-box `powershell.exe`, not the runner's `pwsh`, so this is enforced by execution.
+* **Every external program goes through `Invoke-Native`.** 5.1 turns a stderr line from a native command
+  into an `ErrorRecord`, which under `$ErrorActionPreference = 'Stop'` becomes a `NativeCommandError` and
+  aborts the script on a command that exited 0. And it returns exit code plus merged output as an
+  *object*, because PowerShell flattens an array it returns: `@($code, $lines)` arrives as code, first
+  line, second line, and the caller ends up indexing into log text.
+* **These files are ASCII with CRLF**, and `.gitattributes` marks them `-text` so no checkout rewrites
+  them. Two separate reasons: 5.1 decodes a BOM-less script as the machine's ANSI codepage, so one em dash
+  in a message reaches the operator as three characters of mojibake that no grep will ever flag; and
+  `cmd.exe` parses labels and `goto` in an LF-only batch file differently by build, which is a bug report
+  nobody can reproduce. Byte-for-byte comparison of tag against tree in `release.yml` depends on this too.
+* `-DryRun` **writes nothing**, including on the uv path — `uv tool install` is the one step in here that
+  would otherwise do real work inside a dry run.
+* The default state directory mirrors `config.default_state_dir()`'s order (`OKTO_GRAFX_SERVER_STATE`,
+  `XDG_STATE_HOME`, then the platform habit). That is deliberate so the installer and the daemon cannot
+  disagree about where your registrations are. Change one and you change the other, plus
+  `tests/test_config_and_paths.py`, which asserts both platforms by patching `sys.platform` — patching
+  `os.name` instead turns every `Path` in the process into a `WindowsPath`.
+* There is no umask on NTFS, so the token file's `0600` is an access list with inheritance dropped and one
+  grant (`icacls`); if the call fails, say the promise did not hold rather than printing that it did.
+* **These scripts are only ever executed on CI.** `scripts/test-installer.ps1` is the Windows twin of the
+  POSIX driver and runs on `windows-latest` in `ci.yml` (from the tree) and in `release.yml` (from the
+  published assets, with the in-box 5.1). Editing them without that job green is editing blind: there is
+  no way to run a `.ps1` or a `.cmd` on the macOS or Linux box you are holding.
+
 ## Committing
 
 * Rebase-friendly, imperative subject, ~72 columns, and the body explains the constraint rather than the
