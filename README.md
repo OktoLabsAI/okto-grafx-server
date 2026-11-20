@@ -23,6 +23,18 @@
 
 ---
 
+**Install with one command** — macOS and Linux, no root, and `--dry-run` shows every step before it takes
+one:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OktoLabsAI/okto-grafx-server/v0.1.0/install.sh | bash
+```
+
+It puts `oktografx-server` in `~/.local/bin`, creates a state directory, starts the daemon on
+<http://127.0.0.1:8737/> and prints the administrator token once — open that address and paste it. No
+`pip install`, no Node, no service manager. Flags go after `bash -s --`; the checksum, the uninstaller and
+installing from source are in [Install](#install).
+
 The store stays embedded and on local disk. This server holds it open on your behalf; it does not copy
 it, cache it, or move it. **A local process with filesystem access can open the same store directly and
 bypass every rule below: this is logical access control, not an OS sandbox.**
