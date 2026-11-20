@@ -590,7 +590,9 @@ try {
                             # this picked is the one that takes a file name, and .NET ran Path.GetFullPath
                             # over the SDDL before reporting that no such file existed - "D:P(A;;FA;;;S-1-
                             # 5-21-...)" being, to that API, a path relative to the current directory on
-                            # drive D:. Same recipe, unambiguous calls, and the claim is checked after.
+                            # drive D:. And the File entry points are Framework-only: the harness, which
+                            # runs on pwsh 7, reaches the same DACL through Get-Acl/Set-Acl instead, so do
+                            # not "unify" the two - the check that matters reads the file, not the call.
                             $security = [System.IO.File]::GetAccessControl($TokenPath)
                             # Protected, and not preserving what came from the parent: a token file must
                             # not become readable next month because somebody relaxed its folder.

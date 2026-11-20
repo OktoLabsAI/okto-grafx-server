@@ -200,22 +200,24 @@ function Set-OwnerOnlyAcl {
     # because a promise tested through a different mechanism is not the promise being tested.
     param([string] $Path)
     $sid = Get-OwnerSid
-    # The calls install.ps1 makes, in the same order, for the same reason: the FileSecurity constructor
-    # that looks like it parses SDDL is the one that takes a file name, and .NET resolved
-    # "D:P(A;;FA;;;S-1-5-21-...)" as a path relative to the current directory on drive D: before telling
-    # us it could not find that file.
-    $security = [System.IO.File]::GetAccessControl($Path)
-    $security.SetAccessRuleProtection($true, $false)
-    foreach ($explicit in @($security.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
-        if ($explicit.IdentityReference.Value -ne $sid.Value) { $security.PurgeAccessRules($explicit.IdentityReference) }
+    # The DACL install.ps1 writes, reached through the cmdlets, because the two runtimes do not offer the
+    # same door: this harness runs on pwsh 7 (.NET), where File.GetAccessControl does not exist and the ACL
+    # APIs hang off FileInfo as extension methods, while the scripts it drives run on Windows PowerShell
+    # 5.1 (.NET Framework), where File.GetAccessControl is the obvious call. Same operation, one door
+    # each - and Assert-OwnerOnlyAcl reading the entries back is what separates "different calls" from
+    # "different file".
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($explicit in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+        if ($explicit.IdentityReference.Value -ne $sid.Value) { $acl.PurgeAccessRules($explicit.IdentityReference) }
     }
-    $security.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+    $acl.SetAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
         $sid,
         [System.Security.AccessControl.FileSystemRights]::FullControl,
         [System.Security.AccessControl.InheritanceFlags]::None,
         [System.Security.AccessControl.PropagationFlags]::None,
         [System.Security.AccessControl.AccessControlType]::Allow))
-    [System.IO.File]::SetAccessControl($Path, $security)
+    Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
 function Assert-OwnerOnlyAcl {
